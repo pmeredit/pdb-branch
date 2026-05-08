@@ -46,16 +46,6 @@ CREATE OR REPLACE PACKAGE pdb_branch AUTHID DEFINER AS
         p_notes        IN CLOB DEFAULT NULL
     );
 
-    PROCEDURE create_snapshot(
-        p_pdb_name       IN VARCHAR2,
-        p_snapshot_name  IN VARCHAR2 DEFAULT NULL
-    );
-
-    PROCEDURE drop_snapshot(
-        p_pdb_name       IN VARCHAR2,
-        p_snapshot_name  IN VARCHAR2
-    );
-
     PROCEDURE cleanup(
         p_close_idle_after_minutes  IN NUMBER DEFAULT 60,
         p_drop_expired              IN VARCHAR2 DEFAULT 'Y'
@@ -416,67 +406,6 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         log_event(v_branch_name, 'PROMOTE_BRANCH', p_notes);
         COMMIT;
     END promote_branch;
-
-    PROCEDURE create_snapshot(
-        p_pdb_name       IN VARCHAR2,
-        p_snapshot_name  IN VARCHAR2 DEFAULT NULL
-    ) IS
-        v_pdb_name      VARCHAR2(128) := clean_name(p_pdb_name, 'PDB name');
-        v_snapshot_name VARCHAR2(128);
-        v_original_con  VARCHAR2(128) := SYS_CONTEXT('USERENV', 'CON_NAME');
-        v_sql           VARCHAR2(32767);
-    BEGIN
-        IF p_snapshot_name IS NOT NULL THEN
-            v_snapshot_name := clean_name(p_snapshot_name, 'snapshot name');
-        END IF;
-
-        EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = ' || qname(v_pdb_name, 'PDB name');
-        v_sql := 'ALTER PLUGGABLE DATABASE SNAPSHOT';
-        IF v_snapshot_name IS NOT NULL THEN
-            v_sql := v_sql || ' ' || qname(v_snapshot_name, 'snapshot name');
-        END IF;
-        EXECUTE IMMEDIATE v_sql;
-        EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = ' || qname(v_original_con, 'container name');
-
-        log_event(v_pdb_name, 'CREATE_SNAPSHOT', NVL(v_snapshot_name, '<system-generated>'));
-        COMMIT;
-    EXCEPTION
-        WHEN OTHERS THEN
-            BEGIN
-                EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = ' || qname(v_original_con, 'container name');
-            EXCEPTION
-                WHEN OTHERS THEN
-                    NULL;
-            END;
-            RAISE;
-    END create_snapshot;
-
-    PROCEDURE drop_snapshot(
-        p_pdb_name       IN VARCHAR2,
-        p_snapshot_name  IN VARCHAR2
-    ) IS
-        v_pdb_name      VARCHAR2(128) := clean_name(p_pdb_name, 'PDB name');
-        v_snapshot_name VARCHAR2(128) := clean_name(p_snapshot_name, 'snapshot name');
-        v_original_con  VARCHAR2(128) := SYS_CONTEXT('USERENV', 'CON_NAME');
-    BEGIN
-        EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = ' || qname(v_pdb_name, 'PDB name');
-        EXECUTE IMMEDIATE
-            'ALTER PLUGGABLE DATABASE DROP SNAPSHOT ' ||
-            qname(v_snapshot_name, 'snapshot name');
-        EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = ' || qname(v_original_con, 'container name');
-
-        log_event(v_pdb_name, 'DROP_SNAPSHOT', v_snapshot_name);
-        COMMIT;
-    EXCEPTION
-        WHEN OTHERS THEN
-            BEGIN
-                EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = ' || qname(v_original_con, 'container name');
-            EXCEPTION
-                WHEN OTHERS THEN
-                    NULL;
-            END;
-            RAISE;
-    END drop_snapshot;
 
     PROCEDURE cleanup(
         p_close_idle_after_minutes  IN NUMBER DEFAULT 60,

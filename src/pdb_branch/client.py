@@ -9,29 +9,6 @@ from .installer import ensure_installed
 
 
 @dataclass(frozen=True)
-class PdbSnapshot:
-    pdb_name: str
-    snapshot_name: str
-    snapshot_scn: int
-    previous_snapshot_scn: int
-    snapshot_time: Any
-    previous_snapshot_time: Any
-    full_snapshot_path: str
-
-    @classmethod
-    def from_row(cls, row: Mapping[str, Any]) -> "PdbSnapshot":
-        return cls(
-            pdb_name=row["CON_NAME"],
-            snapshot_name=row["SNAPSHOT_NAME"],
-            snapshot_scn=row["SNAPSHOT_SCN"],
-            previous_snapshot_scn=row["PREVIOUS_SNAPSHOT_SCN"],
-            snapshot_time=row["SNAPSHOT_TIME"],
-            previous_snapshot_time=row["PREVIOUS_SNAPSHOT_TIME"],
-            full_snapshot_path=row["FULL_SNAPSHOT_PATH"],
-        )
-
-
-@dataclass(frozen=True)
 class BranchInfo:
     branch_name: str
     parent_pdb: Optional[str]
@@ -158,38 +135,6 @@ class BranchClient:
     def promote(self, branch_name: str, *, notes: Optional[str] = None) -> None:
         with self.cursor() as cur:
             cur.callproc("pdb_branch.promote_branch", [branch_name, notes])
-
-    def create_snapshot(self, pdb_name: str, *, snapshot_name: Optional[str] = None) -> None:
-        with self.cursor() as cur:
-            cur.callproc("pdb_branch.create_snapshot", [pdb_name, snapshot_name])
-
-    def drop_snapshot(self, pdb_name: str, snapshot_name: str) -> None:
-        with self.cursor() as cur:
-            cur.callproc("pdb_branch.drop_snapshot", [pdb_name, snapshot_name])
-
-    def list_snapshots(self, *, pdb_name: Optional[str] = None) -> list[PdbSnapshot]:
-        where = ""
-        params: dict[str, Any] = {}
-        if pdb_name is not None:
-            where = "WHERE con_name = UPPER(:pdb_name)"
-            params["pdb_name"] = pdb_name
-
-        rows = self._query(
-            f"""
-            SELECT con_name,
-                   snapshot_name,
-                   snapshot_scn,
-                   previous_snapshot_scn,
-                   snapshot_time,
-                   previous_snapshot_time,
-                   full_snapshot_path
-              FROM dba_pdb_snapshots
-              {where}
-             ORDER BY con_name, snapshot_scn DESC
-            """,
-            params,
-        )
-        return [PdbSnapshot.from_row(row) for row in rows]
 
     def cleanup(
         self,
