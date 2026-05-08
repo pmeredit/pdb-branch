@@ -84,6 +84,68 @@ client.record_score("AGENT_RAG_042", 0.91, notes="eval: qa_regression_v3")
 client.promote("AGENT_RAG_042", notes="winner for current retrieval policy")
 ```
 
+## Agent Workflow Usage
+
+Use two separate connections:
+
+- **Control-plane connection:** trusted orchestration code connects to
+  `CDB$ROOT` and uses `BranchClient` to create, open, close, and drop PDB
+  branches.
+- **Workload connection:** the agent connects directly to the branch PDB with a
+  normal application user and runs ordinary SQL against branch-local data.
+
+The agent does not need `SYS`, `CDB$ROOT`, or branch-management privileges. It
+only needs a DSN for the branch PDB and normal app credentials. Users, schemas,
+tables, seed data, and privileges should already exist in the parent PDB so they
+are copied into each branch.
+
+```python
+import oracledb
+from pdb_branch import BranchClient
+
+# Trusted orchestration code. Do not hand this connection to the agent.
+root = oracledb.connect(
+    user="sys",
+    password="...",
+    dsn="localhost:1521/FREE",
+    mode=oracledb.AUTH_MODE_SYSDBA,
+)
+
+branches = BranchClient(root)
+branches.create_branch("AGENT_RAG_042", from_pdb="GOLDEN_MASTER")
+
+# This is the connection information the agent should receive.
+branch_dsn = "localhost:1521/AGENT_RAG_042"
+
+# Normal workload connection into the branch PDB.
+branch_conn = oracledb.connect(
+    user="app_user",
+    password="app_password",
+    dsn=branch_dsn,
+)
+
+with branch_conn.cursor() as cur:
+    cur.execute(
+        "INSERT INTO experiment_log(branch_name, event) VALUES (:1, :2)",
+        ["AGENT_RAG_042", "agent started trial"],
+    )
+
+    cur.execute("SELECT COUNT(*) FROM documents")
+    document_count = cur.fetchone()[0]
+
+branch_conn.commit()
+
+branches.record_score(
+    "AGENT_RAG_042",
+    0.91,
+    notes=f"agent completed eval over {document_count} documents",
+)
+```
+
+Once a branch PDB is open, there is no special "branch query" mode. The branch is
+just an isolated Oracle PDB service; agents run the same SQL they would run
+against any other Oracle database.
+
 ## Optional Resource Profiles
 
 The base branch lifecycle API does not require Resource Manager profiles. If the
