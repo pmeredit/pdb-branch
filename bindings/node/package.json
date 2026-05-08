@@ -1,0 +1,28 @@
+{
+  "name": "@pdb-branch/node",
+  "version": "0.1.0",
+  "description": "Node.js binding for Oracle PDB branch management",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "oracle",
+    "pdb",
+    "branching",
+    "agents"
+  ],
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "oracledb": ">=6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "oracledb": {
+      "optional": true
+    }
+  }
+}
