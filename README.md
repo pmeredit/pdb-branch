@@ -34,6 +34,14 @@ PDB requirements. If storage snapshots are unavailable, use ordinary PDB clones
 by passing `snapshot_copy=False`, but those clones will not have the cheap
 copy-on-write behavior this project is designed around.
 
+Oracle also exposes PDB snapshot carousel metadata in `DBA_PDB_SNAPSHOTS` and
+snapshot file metadata in `DBA_PDB_SNAPSHOTFILE`. These views exist in the 19c
+and 23ai documentation and are useful for managing source-PDB snapshot
+baselines. They do **not** replace this library's branch metadata tables because
+`DBA_PDB_SNAPSHOTS` describes snapshots created with
+`ALTER PLUGGABLE DATABASE SNAPSHOT`; it does not list branch PDBs created with
+`CREATE PLUGGABLE DATABASE ... SNAPSHOT COPY`.
+
 ## Shape
 
 - `PDB_BRANCH` PL/SQL package
