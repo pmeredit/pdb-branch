@@ -52,6 +52,114 @@ impl From<i64> for BindValue {
     }
 }
 
+#[cfg(feature = "oracle-rs")]
+pub struct OracleRsExecutor {
+    connection: oracle_rs::Connection,
+}
+
+#[cfg(feature = "oracle-rs")]
+impl OracleRsExecutor {
+    pub fn new(connection: oracle_rs::Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn connection(&self) -> &oracle_rs::Connection {
+        &self.connection
+    }
+}
+
+#[cfg(feature = "oracle-rs")]
+#[async_trait]
+impl SqlExecutor for OracleRsExecutor {
+    async fn execute(&self, sql: &str, binds: &[BindValue]) -> Result<()> {
+        let values = binds.iter().map(to_oracle_rs_value).collect::<Vec<_>>();
+        self.connection
+            .execute(sql, &values)
+            .await
+            .map(|_| ())
+            .map_err(|err| Error::Database(err.to_string()))
+    }
+
+    async fn commit(&self) -> Result<()> {
+        self.connection
+            .commit()
+            .await
+            .map_err(|err| Error::Database(err.to_string()))
+    }
+}
+
+#[cfg(feature = "oracle-rs")]
+fn to_oracle_rs_value(value: &BindValue) -> oracle_rs::Value {
+    match value {
+        BindValue::Null => oracle_rs::Value::Null,
+        BindValue::String(value) => oracle_rs::Value::String(value.clone()),
+        BindValue::Number(value) => oracle_rs::Value::Float(*value),
+    }
+}
+
+#[cfg(feature = "rust-oracle")]
+pub struct RustOracleExecutor {
+    connection: oracle::Connection,
+}
+
+#[cfg(feature = "rust-oracle")]
+impl RustOracleExecutor {
+    pub fn new(connection: oracle::Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn connection(&self) -> &oracle::Connection {
+        &self.connection
+    }
+}
+
+#[cfg(feature = "rust-oracle")]
+#[async_trait]
+impl SqlExecutor for RustOracleExecutor {
+    async fn execute(&self, sql: &str, binds: &[BindValue]) -> Result<()> {
+        use oracle::sql_type::ToSql;
+
+        let values = binds.iter().map(RustOracleBind::from).collect::<Vec<_>>();
+        let params = values
+            .iter()
+            .map(|value| match value {
+                RustOracleBind::Null(value) => value as &dyn ToSql,
+                RustOracleBind::String(value) => value as &dyn ToSql,
+                RustOracleBind::Number(value) => value as &dyn ToSql,
+            })
+            .collect::<Vec<_>>();
+
+        self.connection
+            .execute(sql, &params)
+            .map(|_| ())
+            .map_err(|err| Error::Database(err.to_string()))
+    }
+
+    async fn commit(&self) -> Result<()> {
+        self.connection
+            .commit()
+            .map_err(|err| Error::Database(err.to_string()))
+    }
+}
+
+#[cfg(feature = "rust-oracle")]
+enum RustOracleBind {
+    Null(Option<String>),
+    String(String),
+    Number(f64),
+}
+
+#[cfg(feature = "rust-oracle")]
+impl From<&BindValue> for RustOracleBind {
+    fn from(value: &BindValue) -> Self {
+        match value {
+            BindValue::Null => Self::Null(None),
+            BindValue::String(value) => Self::String(value.clone()),
+            BindValue::Number(value) => Self::Number(*value),
+        }
+    }
+}
+
 #[async_trait]
 pub trait SqlExecutor {
     async fn execute(&self, sql: &str, binds: &[BindValue]) -> Result<()>;
@@ -307,6 +415,20 @@ mod tests {
             *self.commits.lock().unwrap() += 1;
             Ok(())
         }
+    }
+
+    #[cfg(feature = "oracle-rs")]
+    #[test]
+    fn oracle_rs_executor_satisfies_client_bounds() {
+        fn assert_executor<T: SqlExecutor + Send + Sync>() {}
+        assert_executor::<OracleRsExecutor>();
+    }
+
+    #[cfg(feature = "rust-oracle")]
+    #[test]
+    fn rust_oracle_executor_satisfies_client_bounds() {
+        fn assert_executor<T: SqlExecutor + Send + Sync>() {}
+        assert_executor::<RustOracleExecutor>();
     }
 
     #[test]

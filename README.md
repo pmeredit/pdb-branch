@@ -48,7 +48,8 @@ copy-on-write behavior this project is designed around.
 - `sql/` - shared PL/SQL install scripts
 - `bindings/python/` - Python binding
 - `bindings/node/` - Node.js binding
-- `bindings/rust/` - Rust binding
+- `bindings/rust/` - Rust binding; defaults to `oracle-rs` and can use the
+  ODPI-C based `oracle` crate with `--no-default-features --features rust-oracle`
 - `bindings/java/` - Java binding
 
 ## Prerequisites
