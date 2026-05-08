@@ -6,6 +6,34 @@ copies feel like cheap database branches for agentic workflow experiments.
 The Python layer installs or upgrades the PL/SQL package at startup. After that,
 branch lifecycle operations go through a stable database-side API.
 
+## Oracle Version Support Disclaimer
+
+This library is intended for Oracle Database environments where you can connect
+to `CDB$ROOT` and run PDB lifecycle DDL such as `CREATE PLUGGABLE DATABASE`,
+`ALTER PLUGGABLE DATABASE`, and `DROP PLUGGABLE DATABASE`.
+
+Expected support:
+
+- **Best target:** Oracle Database / Oracle AI Database **19c or newer** in a
+  self-managed CDB where PDB cloning and Snapshot Copy PDBs are available.
+- **Primary development target:** Oracle AI Database **23ai / 26ai** CDBs.
+- **Oracle Free Docker image:** suitable for local development, smoke tests, and
+  small demonstrations. The Free image creates a CDB service named `FREE` and a
+  default PDB service named `FREEPDB1`; connect to `FREE` for library install and
+  branch management. Oracle Free is resource-limited and unsupported, so it is
+  not a realistic high-density branch platform.
+- **Oracle Free Lite Docker image:** may work for the basic PL/SQL installer and
+  simple PDB DDL, but use the **Full** Free image for compatibility testing.
+- **Public Autonomous Database Serverless / Always Free:** not a v1 target. ADB
+  application connections normally land in an existing PDB, not in a customer-
+  managed `CDB$ROOT`, so they generally cannot run this library's PDB branch DDL.
+
+Snapshot-copy support is not just a database-version question. The source PDB,
+database parameters, and underlying storage must satisfy Oracle's Snapshot Copy
+PDB requirements. If storage snapshots are unavailable, use ordinary PDB clones
+by passing `snapshot_copy=False`, but those clones will not have the cheap
+copy-on-write behavior this project is designed around.
+
 ## Shape
 
 - `PDB_BRANCH` PL/SQL package
