@@ -1,5 +1,4 @@
-from importlib import resources
-
+from pdb_branch.installer import read_script
 from pdb_branch.sqlsplit import split_sqlplus_script
 
 
@@ -22,7 +21,7 @@ END;
 
 def test_bundled_scripts_are_split_into_statements() -> None:
     for script_name in ("001_tables.sql", "002_package.sql"):
-        script = resources.files("pdb_branch.sql").joinpath(script_name).read_text(encoding="utf-8")
+        script = read_script(script_name)
         statements = split_sqlplus_script(script)
 
         assert statements

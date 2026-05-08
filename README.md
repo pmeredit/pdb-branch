@@ -1,9 +1,10 @@
 # pdb-branch
 
-`pdb-branch` is a small Python + PL/SQL library for making Oracle PDB snapshot
-copies feel like cheap database branches for agentic workflow experiments.
+`pdb-branch` is a small multi-language library over a shared PL/SQL package for
+making Oracle PDB snapshot copies feel like cheap database branches for agentic
+workflow experiments.
 
-The Python layer installs or upgrades the PL/SQL package at startup. After that,
+Language bindings install or upgrade the PL/SQL package at startup. After that,
 branch lifecycle operations go through a stable database-side API.
 
 ## Oracle Version Support Disclaimer
@@ -38,9 +39,17 @@ copy-on-write behavior this project is designed around.
 
 - `PDB_BRANCH` PL/SQL package
 - `PDB_BRANCH_BRANCHES`, `PDB_BRANCH_EVENTS`, and `PDB_BRANCH_PROFILES` control tables
-- Python `BranchClient` wrapper
+- Language-specific `BranchClient` wrappers
 - Optional Resource Manager profile setup for `PDB_BRANCH_ACTIVE`,
   `PDB_BRANCH_IDLE`, and `PDB_BRANCH_BACKGROUND`
+
+## Repository Layout
+
+- `sql/` - shared PL/SQL install scripts
+- `bindings/python/` - Python binding
+- `bindings/node/` - Node.js binding
+- `bindings/rust/` - Rust binding
+- `bindings/java/` - Java binding
 
 ## Prerequisites
 
@@ -59,7 +68,15 @@ The first version intentionally avoids `FILE_NAME_CONVERT` and custom storage
 clauses. Use Oracle Managed Files or a platform where the simple snapshot-copy
 form is valid.
 
-## Python Usage
+## Python Binding Usage
+
+Install from the Python binding directory:
+
+```bash
+cd bindings/python
+python -m pip install -e '.[dev]'
+python -m pytest
+```
 
 ```python
 import oracledb

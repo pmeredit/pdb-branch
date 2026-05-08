@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
 from .sqlsplit import split_sqlplus_script
@@ -25,7 +26,7 @@ def ensure_installed(connection: Any) -> None:
 
 
 def run_script(connection: Any, script_name: str) -> None:
-    script = resources.files("pdb_branch.sql").joinpath(script_name).read_text(encoding="utf-8")
+    script = read_script(script_name)
     cursor = connection.cursor()
     try:
         for statement in split_sqlplus_script(script):
@@ -33,3 +34,11 @@ def run_script(connection: Any, script_name: str) -> None:
     finally:
         cursor.close()
     connection.commit()
+
+
+def read_script(script_name: str) -> str:
+    try:
+        return resources.files("pdb_branch.sql").joinpath(script_name).read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError):
+        repo_sql = Path(__file__).resolve().parents[4] / "sql" / script_name
+        return repo_sql.read_text(encoding="utf-8")

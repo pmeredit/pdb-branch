@@ -1,0 +1,12 @@
+# pdb-branch Python Binding
+
+Python control-plane binding for `pdb-branch`.
+
+Install from this directory:
+
+```bash
+python -m pip install -e '.[dev]'
+python -m pytest
+```
+
+Use `pdb_branch.BranchClient` with a privileged connection to `CDB$ROOT`.
