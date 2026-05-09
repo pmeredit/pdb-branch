@@ -278,10 +278,18 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         v_used_snapshot      BOOLEAN;
         v_error_code         NUMBER;
         v_error_message      VARCHAR2(4000);
+        v_fallback_warning   VARCHAR2(4000);
         v_sql               VARCHAR2(32767);
     BEGIN
         v_create_file_dest := create_file_dest(v_from_pdb);
-        v_used_snapshot := v_requested_snapshot AND NOT is_oracle_free;
+        IF v_requested_snapshot AND is_oracle_free THEN
+            v_used_snapshot := FALSE;
+            v_fallback_warning :=
+                'WARNING: SNAPSHOT COPY requested on Oracle Free; created with full clone ' ||
+                'because Oracle Free container storage does not support storage snapshots';
+        ELSE
+            v_used_snapshot := v_requested_snapshot;
+        END IF;
 
         v_sql := create_branch_sql(
             v_branch_name,
@@ -298,6 +306,10 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
                 v_error_message := SQLERRM;
                 IF v_used_snapshot AND snapshot_copy_unsupported(v_error_code, v_error_message) THEN
                     v_used_snapshot := FALSE;
+                    v_fallback_warning :=
+                        'WARNING: SNAPSHOT COPY requested but Oracle reported storage snapshots ' ||
+                        'are unsupported (' || TO_CHAR(v_error_code) || ': ' ||
+                        SUBSTR(v_error_message, 1, 3500) || '); created with full clone';
                     v_sql := create_branch_sql(
                         v_branch_name,
                         v_from_pdb,
@@ -320,7 +332,7 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         );
         log_event(v_branch_name, 'CREATE_BRANCH', v_sql);
         IF v_requested_snapshot AND NOT v_used_snapshot THEN
-            log_event(v_branch_name, 'SNAPSHOT_COPY_FALLBACK', 'created with full clone');
+            log_event(v_branch_name, 'SNAPSHOT_COPY_FALLBACK', v_fallback_warning);
         END IF;
         COMMIT;
 

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterator, Mapping, Optional, Sequence, Union
 
 from .installer import ensure_installed
+
+
+class SnapshotCopyFallbackWarning(RuntimeWarning):
+    """Warning emitted when a requested snapshot copy is created as a full clone."""
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,7 @@ class BranchClient:
         expires_at: Optional[datetime] = None,
         notes: Optional[str] = None,
     ) -> None:
+        last_event_id = self._max_event_id(branch_name) if snapshot_copy else None
         with self.cursor() as cur:
             cur.callproc(
                 "pdb_branch.create_branch",
@@ -107,6 +113,8 @@ class BranchClient:
                     notes,
                 ],
             )
+        if snapshot_copy:
+            self._warn_if_snapshot_fell_back(branch_name, last_event_id)
 
     def open_branch(self, branch_name: str, *, profile_name: Optional[str] = None) -> None:
         with self.cursor() as cur:
@@ -212,6 +220,49 @@ class BranchClient:
             columns = [col[0] for col in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
+    def _max_event_id(self, branch_name: str) -> Optional[int]:
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT MAX(event_id)
+                  FROM pdb_branch_events
+                 WHERE branch_name = UPPER(:branch_name)
+                """,
+                {"branch_name": branch_name},
+            )
+            row = cur.fetchone()
+        return row[0] if row and row[0] is not None else None
+
+    def _warn_if_snapshot_fell_back(
+        self,
+        branch_name: str,
+        last_event_id: Optional[int],
+    ) -> None:
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT details
+                  FROM (
+                        SELECT details
+                          FROM pdb_branch_events
+                         WHERE branch_name = UPPER(:branch_name)
+                           AND event_type = 'SNAPSHOT_COPY_FALLBACK'
+                           AND (:last_event_id IS NULL OR event_id > :last_event_id)
+                         ORDER BY event_id DESC
+                       )
+                 WHERE ROWNUM = 1
+                """,
+                {"branch_name": branch_name, "last_event_id": last_event_id},
+            )
+            row = cur.fetchone()
+
+        if row:
+            warnings.warn(
+                _read_lob(row[0]),
+                SnapshotCopyFallbackWarning,
+                stacklevel=3,
+            )
+
 
 def connect(*, install: bool = True, **kwargs: Any) -> BranchClient:
     return BranchClient.connect(install=install, **kwargs)
@@ -219,3 +270,9 @@ def connect(*, install: bool = True, **kwargs: Any) -> BranchClient:
 
 def _yn(value: bool) -> str:
     return "Y" if value else "N"
+
+
+def _read_lob(value: Any) -> str:
+    if hasattr(value, "read"):
+        return str(value.read())
+    return str(value)

@@ -74,7 +74,9 @@ When the library is connected to Oracle Free, `snapshot_copy=True` is treated as
 a full clone because the default Oracle Free container data directory does not
 support storage snapshots. On non-Free databases, `snapshot_copy=True` attempts
 `SNAPSHOT COPY` first and retries as a full clone if Oracle reports `ORA-17525`
-or `ORA-65169`.
+or `ORA-65169`. Every fallback records a `SNAPSHOT_COPY_FALLBACK` event in
+`PDB_BRANCH_EVENTS`; the Python binding also emits
+`SnapshotCopyFallbackWarning`.
 
 ## Python Binding Usage
 
