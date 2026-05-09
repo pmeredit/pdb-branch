@@ -86,6 +86,25 @@ impl SqlExecutor for OracleRsExecutor {
             .await
             .map_err(|err| Error::Database(err.to_string()))
     }
+
+    async fn query_optional_string(
+        &self,
+        sql: &str,
+        binds: &[BindValue],
+    ) -> Result<Option<String>> {
+        let values = binds.iter().map(to_oracle_rs_value).collect::<Vec<_>>();
+        let result = self
+            .connection
+            .query(sql, &values)
+            .await
+            .map_err(|err| Error::Database(err.to_string()))?;
+
+        Ok(result
+            .rows
+            .first()
+            .and_then(|row| row.get_string(0))
+            .map(str::to_owned))
+    }
 }
 
 #[cfg(feature = "oracle-rs")]
@@ -140,6 +159,35 @@ impl SqlExecutor for RustOracleExecutor {
             .commit()
             .map_err(|err| Error::Database(err.to_string()))
     }
+
+    async fn query_optional_string(
+        &self,
+        sql: &str,
+        binds: &[BindValue],
+    ) -> Result<Option<String>> {
+        use oracle::sql_type::ToSql;
+
+        let values = binds.iter().map(RustOracleBind::from).collect::<Vec<_>>();
+        let params = values
+            .iter()
+            .map(|value| match value {
+                RustOracleBind::Null(value) => value as &dyn ToSql,
+                RustOracleBind::String(value) => value as &dyn ToSql,
+                RustOracleBind::Number(value) => value as &dyn ToSql,
+            })
+            .collect::<Vec<_>>();
+
+        let mut rows = self
+            .connection
+            .query(sql, &params)
+            .map_err(|err| Error::Database(err.to_string()))?;
+        let Some(row) = rows.next() else {
+            return Ok(None);
+        };
+        let row = row.map_err(|err| Error::Database(err.to_string()))?;
+        row.get::<_, Option<String>>(0)
+            .map_err(|err| Error::Database(err.to_string()))
+    }
 }
 
 #[cfg(feature = "rust-oracle")]
@@ -163,6 +211,16 @@ impl From<&BindValue> for RustOracleBind {
 #[async_trait]
 pub trait SqlExecutor {
     async fn execute(&self, sql: &str, binds: &[BindValue]) -> Result<()>;
+
+    async fn query_optional_string(
+        &self,
+        _sql: &str,
+        _binds: &[BindValue],
+    ) -> Result<Option<String>> {
+        Err(Error::Database(
+            "executor does not support scalar string queries".to_owned(),
+        ))
+    }
 
     async fn commit(&self) -> Result<()> {
         Ok(())
@@ -204,6 +262,34 @@ where
             ],
         )
         .await
+    }
+
+    pub async fn create_branch_with_result(
+        &self,
+        branch_name: &str,
+        options: BranchOptions<'_>,
+    ) -> Result<CreateBranchResult> {
+        let snapshot_copy_requested = options.snapshot_copy;
+        let last_event_id = if snapshot_copy_requested {
+            self.max_event_id(branch_name).await?
+        } else {
+            None
+        };
+
+        self.create_branch(branch_name, options).await?;
+
+        let fallback_warning = if snapshot_copy_requested {
+            self.snapshot_fallback_warning(branch_name, last_event_id)
+                .await?
+        } else {
+            None
+        };
+
+        Ok(CreateBranchResult {
+            snapshot_copy_requested,
+            snapshot_copy_fell_back: fallback_warning.is_some(),
+            fallback_warning,
+        })
     }
 
     pub async fn open_branch(&self, branch_name: &str, profile_name: Option<&str>) -> Result<()> {
@@ -299,6 +385,59 @@ where
         let sql = format!("BEGIN {name}({placeholders}); END;");
         self.executor.execute(&sql, binds).await
     }
+
+    async fn max_event_id(&self, branch_name: &str) -> Result<Option<i64>> {
+        self.executor
+            .query_optional_string(
+                "
+                SELECT TO_CHAR(MAX(event_id))
+                  FROM pdb_branch_events
+                 WHERE branch_name = UPPER(:1)
+                ",
+                &[branch_name.into()],
+            )
+            .await?
+            .map(|value| {
+                value
+                    .parse::<i64>()
+                    .map_err(|err| Error::Database(format!("invalid event_id value: {err}")))
+            })
+            .transpose()
+    }
+
+    async fn snapshot_fallback_warning(
+        &self,
+        branch_name: &str,
+        last_event_id: Option<i64>,
+    ) -> Result<Option<String>> {
+        self.executor
+            .query_optional_string(
+                "
+                SELECT warning
+                  FROM (
+                        SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
+                          FROM pdb_branch_events
+                         WHERE branch_name = UPPER(:1)
+                           AND event_type = 'SNAPSHOT_COPY_FALLBACK'
+                           AND (:2 IS NULL OR event_id > :2)
+                         ORDER BY event_id DESC
+                       )
+                 WHERE ROWNUM = 1
+                ",
+                &[
+                    branch_name.into(),
+                    last_event_id.map_or(BindValue::Null, BindValue::from),
+                ],
+            )
+            .await
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateBranchResult {
+    pub snapshot_copy_requested: bool,
+    pub snapshot_copy_fell_back: bool,
+    pub fallback_warning: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -398,7 +537,23 @@ mod tests {
     #[derive(Clone, Default)]
     struct FakeExecutor {
         executions: Arc<Mutex<Vec<(String, Vec<BindValue>)>>>,
+        queries: Arc<Mutex<Vec<(String, Vec<BindValue>)>>>,
+        query_results: Arc<Mutex<Vec<Option<String>>>>,
         commits: Arc<Mutex<u32>>,
+    }
+
+    impl FakeExecutor {
+        fn with_query_results(results: Vec<Option<&str>>) -> Self {
+            Self {
+                query_results: Arc::new(Mutex::new(
+                    results
+                        .into_iter()
+                        .map(|value| value.map(str::to_owned))
+                        .collect(),
+                )),
+                ..Self::default()
+            }
+        }
     }
 
     #[async_trait]
@@ -409,6 +564,18 @@ mod tests {
                 .unwrap()
                 .push((sql.to_owned(), binds.to_vec()));
             Ok(())
+        }
+
+        async fn query_optional_string(
+            &self,
+            sql: &str,
+            binds: &[BindValue],
+        ) -> Result<Option<String>> {
+            self.queries
+                .lock()
+                .unwrap()
+                .push((sql.to_owned(), binds.to_vec()));
+            Ok(self.query_results.lock().unwrap().remove(0))
         }
 
         async fn commit(&self) -> Result<()> {
@@ -474,6 +641,47 @@ mod tests {
                 BindValue::Null,
                 "try chunking".into(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_branch_with_result_reports_snapshot_fallback() {
+        let executor = FakeExecutor::with_query_results(vec![
+            Some("10"),
+            Some("WARNING: SNAPSHOT COPY requested on Oracle Free; created with full clone"),
+        ]);
+        let client = BranchClient::new(executor.clone());
+
+        let result = client
+            .create_branch_with_result(
+                "AGENT_RAG_042",
+                BranchOptions {
+                    snapshot_copy: true,
+                    ..BranchOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            CreateBranchResult {
+                snapshot_copy_requested: true,
+                snapshot_copy_fell_back: true,
+                fallback_warning: Some(
+                    "WARNING: SNAPSHOT COPY requested on Oracle Free; created with full clone"
+                        .to_owned()
+                ),
+            }
+        );
+
+        let queries = executor.queries.lock().unwrap();
+        assert_eq!(queries.len(), 2);
+        assert!(queries[0].0.contains("MAX(event_id)"));
+        assert!(queries[1].0.contains("SNAPSHOT_COPY_FALLBACK"));
+        assert_eq!(
+            queries[1].1,
+            vec!["AGENT_RAG_042".into(), BindValue::Number(10.0)]
         );
     }
 

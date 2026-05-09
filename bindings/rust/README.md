@@ -35,6 +35,16 @@ client.create_branch("AGENT_RAG_042", BranchOptions::default()).await?;
 # }
 ```
 
+Use `create_branch_with_result` when callers need to inspect whether a requested
+Snapshot Copy fell back to a full clone:
+
+```rust
+let result = client.create_branch_with_result("AGENT_RAG_043", BranchOptions::default()).await?;
+if result.snapshot_copy_fell_back {
+    eprintln!("{}", result.fallback_warning.as_deref().unwrap_or("snapshot copy fell back"));
+}
+```
+
 Use the `oracle` crate instead:
 
 ```bash

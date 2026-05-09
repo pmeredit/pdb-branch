@@ -79,8 +79,8 @@ async fn run_branch_lifecycle_inner(
     client.ensure_installed().await?;
     prepare_parent_pdb(root, config).await?;
 
-    if let Err(err) = client
-        .create_branch(
+    let create_result = match client
+        .create_branch_with_result(
             branch_name,
             BranchOptions {
                 from_pdb: &config.parent_pdb,
@@ -91,12 +91,40 @@ async fn run_branch_lifecycle_inner(
         )
         .await
     {
-        let facts = collect_database_facts(root, config).await?;
-        return Err(test_error(format!(
-            "create_branch failed against Oracle database:\n{}\nerror: {}",
-            format_database_facts(&facts),
-            err
-        )));
+        Ok(result) => result,
+        Err(err) => {
+            let facts = collect_database_facts(root, config).await?;
+            return Err(test_error(format!(
+                "create_branch failed against Oracle database:\n{}\nerror: {}",
+                format_database_facts(&facts),
+                err
+            )));
+        }
+    };
+
+    ensure(
+        create_result.snapshot_copy_requested == snapshot_copy,
+        "create_branch result should report whether snapshot copy was requested",
+    )?;
+
+    if snapshot_copy {
+        ensure(
+            create_result.snapshot_copy_fell_back,
+            "create_branch result should report snapshot-copy fallback",
+        )?;
+        ensure(
+            create_result
+                .fallback_warning
+                .as_deref()
+                .unwrap_or_default()
+                .contains("created with full clone"),
+            "create_branch result should include the fallback warning text",
+        )?;
+    } else {
+        ensure(
+            !create_result.snapshot_copy_fell_back,
+            "full-clone create_branch result should not report snapshot-copy fallback",
+        )?;
     }
 
     assert_branch_metadata(root, branch_name, config).await?;
