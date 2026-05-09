@@ -8,9 +8,10 @@ CONTAINER="${ORACLE_FREE_CONTAINER:-pdb-branch-oracle-free}"
 PORT="${ORACLE_FREE_PORT:-1521}"
 ORACLE_PASSWORD="${ORACLE_PWD:-PdbBranch1_}"
 PYTHON="${PYTHON:-python3}"
+VENV_DIR="${PDB_BRANCH_TEST_VENV:-${ROOT_DIR}/.venv-integration}"
 STARTUP_TIMEOUT_SECONDS="${ORACLE_FREE_STARTUP_TIMEOUT_SECONDS:-1800}"
-KEEP_CONTAINER="${PDB_BRANCH_KEEP_ORACLE:-0}"
-STARTED_CONTAINER=0
+REMOVE_CONTAINER="${PDB_BRANCH_REMOVE_ORACLE:-0}"
+RECREATE_CONTAINER="${PDB_BRANCH_RECREATE_ORACLE:-0}"
 
 usage() {
     cat <<'USAGE'
@@ -23,7 +24,9 @@ Environment variables:
   ORACLE_FREE_PORT                      Host listener port. Default: 1521
   ORACLE_PWD                            SYS password. Default: PdbBranch1_
   ORACLE_FREE_STARTUP_TIMEOUT_SECONDS   Startup wait timeout. Default: 1800
-  PDB_BRANCH_KEEP_ORACLE                Keep container after tests when set to 1.
+  PDB_BRANCH_REMOVE_ORACLE              Remove container after tests when set to 1.
+  PDB_BRANCH_RECREATE_ORACLE            Remove existing container before tests when set to 1.
+  PDB_BRANCH_TEST_VENV                  Python venv path. Default: .venv-integration
   PDB_BRANCH_TEST_SNAPSHOT_COPY         Also run SNAPSHOT COPY test when set to 1.
   PYTHON                                Python interpreter. Default: python3
 
@@ -42,7 +45,7 @@ if ! command -v "$RUNTIME" >/dev/null 2>&1; then
 fi
 
 cleanup() {
-    if [[ "$STARTED_CONTAINER" == "1" && "$KEEP_CONTAINER" != "1" ]]; then
+    if [[ "$REMOVE_CONTAINER" == "1" ]]; then
         "$RUNTIME" rm -f "$CONTAINER" >/dev/null 2>&1 || true
     fi
 }
@@ -56,18 +59,25 @@ container_running() {
     [[ "$("$RUNTIME" inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == "true" ]]
 }
 
+if [[ "$RECREATE_CONTAINER" == "1" ]]; then
+    "$RUNTIME" rm -f "$CONTAINER" >/dev/null 2>&1 || true
+fi
+
 if container_exists; then
     if ! container_running; then
+        printf 'starting existing Oracle Free container %s\n' "$CONTAINER"
         "$RUNTIME" start "$CONTAINER" >/dev/null
+    else
+        printf 'using existing Oracle Free container %s\n' "$CONTAINER"
     fi
 else
+    printf 'creating Oracle Free container %s from %s\n' "$CONTAINER" "$IMAGE"
     "$RUNTIME" run \
         --detach \
         --name "$CONTAINER" \
         --publish "${PORT}:1521" \
         --env "ORACLE_PWD=${ORACLE_PASSWORD}" \
         "$IMAGE" >/dev/null
-    STARTED_CONTAINER=1
 fi
 
 deadline=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
@@ -92,12 +102,16 @@ if [[ "$health" != "healthy" ]] && ! "$RUNTIME" logs "$CONTAINER" 2>&1 | grep -q
     exit 1
 fi
 
-cd "$ROOT_DIR/bindings/python"
-"$PYTHON" -m pip install -e '.[dev]'
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
+
+"$VENV_DIR/bin/python" -m pip install --upgrade pip
+"$VENV_DIR/bin/python" -m pip install -e "$ROOT_DIR/bindings/python[dev]"
 
 cd "$ROOT_DIR"
 PDB_BRANCH_INTEGRATION=1 \
 PDB_BRANCH_ROOT_DSN="localhost:${PORT}/FREE" \
 PDB_BRANCH_BRANCH_DSN_TEMPLATE="localhost:${PORT}/{branch_name}" \
 PDB_BRANCH_SYS_PASSWORD="$ORACLE_PASSWORD" \
-"$PYTHON" -m pytest bindings/python/tests/integration "$@"
+"$VENV_DIR/bin/python" -m pytest bindings/python/tests/integration "$@"

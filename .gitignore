@@ -1,4 +1,5 @@
 .venv/
+.venv-integration/
 .pytest_cache/
 .ruff_cache/
 target/

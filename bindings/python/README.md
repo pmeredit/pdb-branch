@@ -16,3 +16,6 @@ Run the Oracle Free integration harness from the repo root:
 ```bash
 scripts/run-oracle-free-integration.sh
 ```
+
+The harness creates a repo-local `.venv-integration` virtualenv and reuses the
+named Oracle Free container by default.

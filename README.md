@@ -190,8 +190,15 @@ Useful knobs:
   uses the smaller image for smoke tests.
 - `ORACLE_PWD=...` sets the `SYS` password used when starting a new container.
 - `ORACLE_FREE_PORT=1522` maps the listener to a non-default host port.
-- `PDB_BRANCH_KEEP_ORACLE=1` leaves the container running after the test.
+- `PDB_BRANCH_TEST_VENV=...` selects the Python virtualenv path. The default is
+  `.venv-integration`.
+- `PDB_BRANCH_RECREATE_ORACLE=1` removes the named container before starting.
+- `PDB_BRANCH_REMOVE_ORACLE=1` removes the named container after tests finish.
 - `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` also runs the `SNAPSHOT COPY` variant.
+
+The harness keeps and reuses the named Oracle Free container by default because
+database startup is expensive. It creates a local Python virtualenv for the test
+dependencies instead of installing into the system Python environment.
 
 The default test uses `snapshot_copy=False` because local Docker storage often
 does not satisfy Oracle's storage-snapshot requirements. The snapshot-copy test
