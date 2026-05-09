@@ -63,8 +63,12 @@ cargo test
 Run the Oracle Free integration test from the repository root:
 
 ```bash
-PDB_BRANCH_TEST_RUST=1 scripts/run-oracle-free-integration.sh
+scripts/run-rust-oracle-free-integration.sh
 ```
 
-The Rust integration path uses the default pure-Rust `oracle-rs` backend and the
-shared harness prepares a common CDB control-plane user for it.
+The entry script runs the live Oracle Free lifecycle test through the ODPI-C
+based `rust-oracle` backend because PDB lifecycle DDL requires SYSDBA
+authentication. The pure-Rust `oracle-rs` backend is still covered by the normal
+Rust unit tests, but it does not currently expose SYSDBA authentication. The
+live Rust script therefore needs the Oracle Client runtime expected by the
+`oracle` crate.

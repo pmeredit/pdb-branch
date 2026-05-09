@@ -175,10 +175,11 @@ against any other Oracle database.
 
 ## Oracle Free Integration Tests
 
-The integration harness starts Oracle Database Free in a container, installs the
-Python binding, installs the shared PL/SQL package into `CDB$ROOT`, prepares
-`FREEPDB1` as a parent PDB, creates a branch PDB, connects to that branch as a
-normal app user, writes branch-local data, records a score, and drops the branch.
+The Python integration harness starts Oracle Database Free in a container,
+installs the Python binding, installs the shared PL/SQL package into `CDB$ROOT`,
+prepares `FREEPDB1` as a parent PDB, creates a branch PDB, connects to that
+branch as a normal app user, writes branch-local data, records a score, and
+drops the branch.
 
 ```bash
 scripts/run-oracle-free-integration.sh
@@ -203,10 +204,6 @@ Useful knobs:
 - `PDB_BRANCH_RECREATE_ORACLE=1` removes the named container before starting.
 - `PDB_BRANCH_REMOVE_ORACLE=1` removes the named container after tests finish.
 - `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` also runs the snapshot-copy request path.
-- `PDB_BRANCH_TEST_RUST=1` also runs the Rust Oracle Free integration test
-  against the same container.
-- `PDB_BRANCH_RUST_ROOT_USER=...` selects the common CDB user prepared for the
-  Rust integration test. The default is `C##PDB_BRANCH_RUST`.
 
 The harness keeps and reuses the named Oracle Free container by default because
 database startup is expensive. It creates a local Python virtualenv for the test
@@ -216,10 +213,25 @@ The default test uses `snapshot_copy=False`. The snapshot-copy request path is
 opt-in; on Oracle Free it still creates a full clone through the library's
 fallback behavior.
 
-The Rust integration test uses the default pure-Rust `oracle-rs` backend. Because
-that backend does not expose SYSDBA authentication, the harness creates or
-updates a common CDB test user with the direct privileges needed to install the
-PL/SQL package and manage PDB branches.
+Run the Rust Oracle Free integration test with its own entry script:
+
+```bash
+scripts/run-rust-oracle-free-integration.sh
+```
+
+Oracle PDB lifecycle DDL requires an administrative connection, so the live Rust
+integration script runs the existing ODPI-C based `rust-oracle` backend with
+SYSDBA authentication. The pure-Rust `oracle-rs` backend is still covered by the
+normal Rust unit tests, but it does not currently expose SYSDBA authentication.
+The live Rust script therefore needs the Oracle Client runtime expected by the
+`oracle` crate.
+
+Rust-specific knobs:
+
+- `PDB_BRANCH_SYS_USER=...` selects the administrative CDB user. The default is
+  `sys`.
+- `PDB_BRANCH_SYS_PASSWORD=...` sets that user's password. The default is
+  `ORACLE_PWD`.
 
 On Linux and WSL2, Podman or Docker can run the Oracle Free container directly.
 On macOS, Podman first has to start a Linux VM (`podman machine`), and that VM

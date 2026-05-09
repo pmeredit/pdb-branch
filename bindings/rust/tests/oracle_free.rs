@@ -1,7 +1,8 @@
-#![cfg(feature = "oracle-rs")]
+#![cfg(feature = "rust-oracle")]
 
-use oracle_rs::{Connection, Row, Value};
-use pdb_branch::{BranchClient, BranchOptions, OracleRsExecutor};
+use oracle::sql_type::ToSql;
+use oracle::{Connection, Connector, Privilege, Row};
+use pdb_branch::{BranchClient, BranchOptions, RustOracleExecutor};
 use std::env;
 use std::error::Error;
 use std::io::{Error as IoError, ErrorKind};
@@ -53,9 +54,9 @@ async fn oracle_free_branch_lifecycle() -> TestResult {
 
 async fn run_branch_lifecycle(snapshot_copy: bool) -> TestResult {
     let config = TestConfig::from_env()?;
-    let root = connect(&config.root_dsn, &config.root_user, &config.root_password).await?;
-    let client_root = connect(&config.root_dsn, &config.root_user, &config.root_password).await?;
-    let client = BranchClient::new(OracleRsExecutor::new(client_root));
+    let root = connect_root(&config).await?;
+    let client_root = connect_root(&config).await?;
+    let client = BranchClient::new(RustOracleExecutor::new(client_root));
     let branch_name = make_branch_name(if snapshot_copy { "RBISC" } else { "RBIFC" })?;
 
     let result =
@@ -70,7 +71,7 @@ async fn run_branch_lifecycle(snapshot_copy: bool) -> TestResult {
 async fn run_branch_lifecycle_inner(
     config: &TestConfig,
     root: &Connection,
-    client: &BranchClient<OracleRsExecutor>,
+    client: &BranchClient<RustOracleExecutor>,
     branch_name: &str,
     snapshot_copy: bool,
 ) -> TestResult {
@@ -113,10 +114,10 @@ async fn run_branch_lifecycle_inner(
     execute(
         &branch,
         "INSERT INTO experiment_log(event) VALUES (:1)",
-        &[Value::from("agent wrote to branch")],
+        &[&"agent wrote to branch"],
     )
     .await?;
-    branch.commit().await?;
+    branch.commit()?;
     ensure(
         scalar_i64(&branch, "SELECT COUNT(*) FROM experiment_log", &[]).await? == 1,
         "branch should accept writes from the workload user",
@@ -129,7 +130,7 @@ async fn run_branch_lifecycle_inner(
         (scalar_f64(
             root,
             "SELECT score FROM pdb_branch_branches WHERE branch_name = :1",
-            &[Value::from(branch_name)],
+            &[&branch_name],
         )
         .await?
             - 0.99)
@@ -143,16 +144,12 @@ async fn run_branch_lifecycle_inner(
 
 impl TestConfig {
     fn from_env() -> TestResult<Self> {
-        let root_password = env_first(&[
-            "PDB_BRANCH_RUST_ROOT_PASSWORD",
-            "PDB_BRANCH_SYS_PASSWORD",
-            "ORACLE_PWD",
-        ])
-        .unwrap_or_else(|| "PdbBranch1_".to_owned());
+        let root_password = env_first(&["PDB_BRANCH_SYS_PASSWORD", "ORACLE_PWD"])
+            .unwrap_or_else(|| "PdbBranch1_".to_owned());
 
         Ok(Self {
             root_dsn: env_or("PDB_BRANCH_ROOT_DSN", "localhost:1521/FREE"),
-            root_user: env_or("PDB_BRANCH_RUST_ROOT_USER", "system"),
+            root_user: env_or("PDB_BRANCH_SYS_USER", "sys"),
             root_password,
             branch_dsn_template: env_or(
                 "PDB_BRANCH_BRANCH_DSN_TEMPLATE",
@@ -179,7 +176,15 @@ impl TestConfig {
 }
 
 async fn connect(dsn: &str, user: &str, password: &str) -> TestResult<Connection> {
-    Ok(Connection::connect(dsn, user, password).await?)
+    Ok(Connection::connect(user, password, dsn)?)
+}
+
+async fn connect_root(config: &TestConfig) -> TestResult<Connection> {
+    Ok(
+        Connector::new(&config.root_user, &config.root_password, &config.root_dsn)
+            .privilege(Privilege::Sysdba)
+            .connect()?,
+    )
 }
 
 async fn connect_workload(config: &TestConfig, pdb_name: &str) -> TestResult<Connection> {
@@ -188,7 +193,7 @@ async fn connect_workload(config: &TestConfig, pdb_name: &str) -> TestResult<Con
     let mut last_error = None;
 
     while Instant::now() < deadline {
-        match Connection::connect(&dsn, &config.app_user, &config.app_password).await {
+        match Connection::connect(&config.app_user, &config.app_password, &dsn) {
             Ok(connection) => return Ok(connection),
             Err(err) => {
                 last_error = Some(err.to_string());
@@ -241,12 +246,12 @@ async fn collect_database_facts(
     )
     .await?
     {
-        match row.get_string(0) {
+        match row_string(&row, 0).as_deref() {
             Some("db_create_file_dest") => {
-                db_create_file_dest = row.get_string(1).map(str::to_owned);
+                db_create_file_dest = row_string(&row, 1);
             }
             Some("pdb_file_name_convert") => {
-                pdb_file_name_convert = row.get_string(1).map(str::to_owned);
+                pdb_file_name_convert = row_string(&row, 1);
             }
             _ => {}
         }
@@ -255,7 +260,7 @@ async fn collect_database_facts(
     let parent = rows(
         root,
         "SELECT open_mode, restricted FROM v$pdbs WHERE name = :1",
-        &[Value::from(config.parent_pdb.as_str())],
+        &[&config.parent_pdb],
     )
     .await?;
 
@@ -272,14 +277,8 @@ async fn collect_database_facts(
         db_create_file_dest,
         pdb_file_name_convert,
         parent_pdb: config.parent_pdb.clone(),
-        parent_open_mode: parent
-            .first()
-            .and_then(|row| row.get_string(0))
-            .map(str::to_owned),
-        parent_restricted: parent
-            .first()
-            .and_then(|row| row.get_string(1))
-            .map(str::to_owned),
+        parent_open_mode: parent.first().and_then(|row| row_string(row, 0)),
+        parent_restricted: parent.first().and_then(|row| row_string(row, 1)),
     })
 }
 
@@ -379,7 +378,7 @@ async fn prepare_parent_pdb(root: &Connection, config: &TestConfig) -> TestResul
         &[],
     )
     .await?;
-    parent.commit().await?;
+    parent.commit()?;
 
     close_pdb(root, &config.parent_pdb).await?;
     execute(
@@ -407,7 +406,7 @@ async fn mutate_parent_after_branch_create(root: &Connection, config: &TestConfi
         &[],
     )
     .await?;
-    parent.commit().await?;
+    parent.commit()?;
     ensure(
         scalar_i64(&parent, "SELECT COUNT(*) FROM pdb_branch_seed", &[]).await? == 2,
         "parent mutation should be visible in the parent PDB",
@@ -442,20 +441,20 @@ async fn assert_branch_metadata(
     let branch = required_row(
         root,
         "SELECT branch_name, parent_pdb, status FROM pdb_branch_branches WHERE branch_name = :1",
-        &[Value::from(branch_name)],
+        &[&branch_name],
     )
     .await?;
 
     ensure(
-        branch.get_string(0) == Some(branch_name),
+        row_string(&branch, 0).as_deref() == Some(branch_name),
         "control table should record branch name",
     )?;
     ensure(
-        branch.get_string(1) == Some(config.parent_pdb.as_str()),
+        row_string(&branch, 1).as_deref() == Some(config.parent_pdb.as_str()),
         "control table should record parent PDB",
     )?;
     ensure(
-        branch.get_string(2) == Some("OPEN"),
+        row_string(&branch, 2).as_deref() == Some("OPEN"),
         "created branch should be open",
     )
 }
@@ -474,7 +473,7 @@ async fn assert_snapshot_fallback_event(root: &Connection, branch_name: &str) ->
                )
          WHERE ROWNUM = 1
         ",
-        &[Value::from(branch_name)],
+        &[&branch_name],
     )
     .await?;
     ensure(
@@ -483,13 +482,13 @@ async fn assert_snapshot_fallback_event(root: &Connection, branch_name: &str) ->
     )
 }
 
-async fn execute(connection: &Connection, sql: &str, parameters: &[Value]) -> TestResult {
-    connection.execute(sql, parameters).await?;
+async fn execute(connection: &Connection, sql: &str, parameters: &[&dyn ToSql]) -> TestResult {
+    connection.execute(sql, parameters)?;
     Ok(())
 }
 
 async fn execute_ignore(connection: &Connection, sql: &str, ignored_codes: &[u32]) -> TestResult {
-    match connection.execute(sql, &[]).await {
+    match connection.execute(sql, &[]) {
         Ok(_) => Ok(()),
         Err(err) if error_code(&err).map_or(false, |code| ignored_codes.contains(&code)) => Ok(()),
         Err(err) => Err(Box::new(err)),
@@ -499,27 +498,38 @@ async fn execute_ignore(connection: &Connection, sql: &str, ignored_codes: &[u32
 async fn scalar_string(
     connection: &Connection,
     sql: &str,
-    parameters: &[Value],
+    parameters: &[&dyn ToSql],
 ) -> TestResult<String> {
     let row = required_row(connection, sql, parameters).await?;
-    row.get_string(0)
-        .map(str::to_owned)
+    row_string(&row, 0)
         .ok_or_else(|| test_error(format!("query returned NULL or non-string value: {sql}")))
 }
 
-async fn scalar_i64(connection: &Connection, sql: &str, parameters: &[Value]) -> TestResult<i64> {
+async fn scalar_i64(
+    connection: &Connection,
+    sql: &str,
+    parameters: &[&dyn ToSql],
+) -> TestResult<i64> {
     let row = required_row(connection, sql, parameters).await?;
-    row.get_i64(0)
+    row_i64(&row, 0)
         .ok_or_else(|| test_error(format!("query returned NULL or non-integer value: {sql}")))
 }
 
-async fn scalar_f64(connection: &Connection, sql: &str, parameters: &[Value]) -> TestResult<f64> {
+async fn scalar_f64(
+    connection: &Connection,
+    sql: &str,
+    parameters: &[&dyn ToSql],
+) -> TestResult<f64> {
     let row = required_row(connection, sql, parameters).await?;
-    row.get_f64(0)
+    row_f64(&row, 0)
         .ok_or_else(|| test_error(format!("query returned NULL or non-number value: {sql}")))
 }
 
-async fn required_row(connection: &Connection, sql: &str, parameters: &[Value]) -> TestResult<Row> {
+async fn required_row(
+    connection: &Connection,
+    sql: &str,
+    parameters: &[&dyn ToSql],
+) -> TestResult<Row> {
     rows(connection, sql, parameters)
         .await?
         .into_iter()
@@ -527,16 +537,32 @@ async fn required_row(connection: &Connection, sql: &str, parameters: &[Value]) 
         .ok_or_else(|| test_error(format!("query returned no rows: {sql}")))
 }
 
-async fn rows(connection: &Connection, sql: &str, parameters: &[Value]) -> TestResult<Vec<Row>> {
-    Ok(connection.query(sql, parameters).await?.rows)
+async fn rows(
+    connection: &Connection,
+    sql: &str,
+    parameters: &[&dyn ToSql],
+) -> TestResult<Vec<Row>> {
+    let mut rows = Vec::new();
+    for row in connection.query(sql, parameters)? {
+        rows.push(row?);
+    }
+    Ok(rows)
 }
 
-fn error_code(err: &oracle_rs::Error) -> Option<u32> {
-    match err {
-        oracle_rs::Error::OracleError { code, .. } => Some(*code),
-        oracle_rs::Error::ServerError { code, .. } => Some(*code),
-        _ => None,
-    }
+fn row_string(row: &Row, index: usize) -> Option<String> {
+    row.get::<_, Option<String>>(index).ok().flatten()
+}
+
+fn row_i64(row: &Row, index: usize) -> Option<i64> {
+    row.get::<_, Option<i64>>(index).ok().flatten()
+}
+
+fn row_f64(row: &Row, index: usize) -> Option<f64> {
+    row.get::<_, Option<f64>>(index).ok().flatten()
+}
+
+fn error_code(err: &oracle::Error) -> Option<u32> {
+    err.oci_code().and_then(|code| u32::try_from(code).ok())
 }
 
 fn env_or(name: &str, default: &str) -> String {

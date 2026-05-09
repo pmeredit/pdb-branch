@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from pdb_branch import BranchClient
+from pdb_branch import BranchClient, SnapshotCopyFallbackWarning
 
 pytestmark = pytest.mark.integration
 
@@ -67,12 +67,21 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
         prepare_parent_pdb(root, parent_pdb, app_user, app_password)
 
         try:
-            client.create_branch(
-                branch_name,
-                from_pdb=parent_pdb,
-                snapshot_copy=snapshot_copy,
-                notes="oracle free integration test",
-            )
+            if snapshot_copy:
+                with pytest.warns(SnapshotCopyFallbackWarning, match="created with full clone"):
+                    client.create_branch(
+                        branch_name,
+                        from_pdb=parent_pdb,
+                        snapshot_copy=snapshot_copy,
+                        notes="oracle free integration test",
+                    )
+            else:
+                client.create_branch(
+                    branch_name,
+                    from_pdb=parent_pdb,
+                    snapshot_copy=snapshot_copy,
+                    notes="oracle free integration test",
+                )
         except oracledb.DatabaseError as exc:
             facts = collect_database_facts(root, parent_pdb)
             pytest.fail(
