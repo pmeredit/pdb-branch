@@ -68,10 +68,10 @@ destination from the parent PDB datafile directory:
 CREATE PLUGGABLE DATABASE branch_name FROM parent_pdb SNAPSHOT COPY CREATE_FILE_DEST = '/path'
 ```
 
-The default Oracle Free container data directory supports full-clone integration
-tests, but it may not support storage snapshots. In that environment, the
-optional snapshot-copy integration test skips when Oracle reports `ORA-17525` or
-`ORA-65169`.
+The Oracle Free integration harness uses full clones when connected to Oracle
+Free, because the default Oracle Free container data directory does not support
+storage snapshots. For non-Free databases, the optional snapshot-copy integration
+test skips when Oracle reports `ORA-17525` or `ORA-65169`.
 
 ## Python Binding Usage
 

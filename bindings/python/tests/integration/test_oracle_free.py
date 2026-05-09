@@ -63,7 +63,8 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
     client: BranchClient | None = None
 
     try:
-        require_cdb_root(root, parent_pdb)
+        facts = require_cdb_root(root, parent_pdb)
+        effective_snapshot_copy = snapshot_copy and not is_oracle_free(facts)
         client = BranchClient(root)
         prepare_parent_pdb(root, parent_pdb, app_user, app_password)
 
@@ -71,7 +72,7 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
             client.create_branch(
                 branch_name,
                 from_pdb=parent_pdb,
-                snapshot_copy=snapshot_copy,
+                snapshot_copy=effective_snapshot_copy,
                 notes="oracle free integration test",
             )
         except oracledb.DatabaseError as exc:
@@ -338,6 +339,10 @@ def snapshot_copy_unsupported(exc: BaseException) -> bool:
 
     message = str(exc)
     return any(f"ORA-{unsupported_code}" in message for unsupported_code in SNAPSHOT_COPY_UNSUPPORTED_CODES)
+
+
+def is_oracle_free(facts: DatabaseFacts) -> bool:
+    return "FREE" in facts.banner.upper()
 
 
 def make_branch_name(prefix: str) -> str:
