@@ -14,7 +14,7 @@ Use `pdb_branch.BranchClient` with a privileged connection to `CDB$ROOT`.
 Run the Oracle Free integration harness from the repo root:
 
 ```bash
-scripts/run-oracle-free-integration.sh
+scripts/run-python-oracle-free-integration.sh
 ```
 
 The harness creates a repo-local `.venv-integration` virtualenv and reuses the

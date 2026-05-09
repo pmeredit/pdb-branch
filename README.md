@@ -182,14 +182,14 @@ branch as a normal app user, writes branch-local data, records a score, and
 drops the branch.
 
 ```bash
-scripts/run-oracle-free-integration.sh
+scripts/run-python-oracle-free-integration.sh
 ```
 
 By default the harness uses Podman and the full Oracle Free image:
 
 ```bash
 ORACLE_FREE_IMAGE=container-registry.oracle.com/database/free:latest \
-  scripts/run-oracle-free-integration.sh
+  scripts/run-python-oracle-free-integration.sh
 ```
 
 Useful knobs:
