@@ -12,6 +12,9 @@ VENV_DIR="${PDB_BRANCH_TEST_VENV:-${ROOT_DIR}/.venv-integration}"
 STARTUP_TIMEOUT_SECONDS="${ORACLE_FREE_STARTUP_TIMEOUT_SECONDS:-1800}"
 REMOVE_CONTAINER="${PDB_BRANCH_REMOVE_ORACLE:-0}"
 RECREATE_CONTAINER="${PDB_BRANCH_RECREATE_ORACLE:-0}"
+RUN_RUST="${PDB_BRANCH_TEST_RUST:-0}"
+RUST_ROOT_USER="${PDB_BRANCH_RUST_ROOT_USER:-C##PDB_BRANCH_RUST}"
+RUST_ROOT_PASSWORD="${PDB_BRANCH_RUST_ROOT_PASSWORD:-${ORACLE_PASSWORD}}"
 
 usage() {
     cat <<'USAGE'
@@ -28,6 +31,9 @@ Environment variables:
   PDB_BRANCH_RECREATE_ORACLE            Remove existing container before tests when set to 1.
   PDB_BRANCH_TEST_VENV                  Python venv path. Default: .venv-integration
   PDB_BRANCH_TEST_SNAPSHOT_COPY         Also run the snapshot-copy case; Oracle Free falls back to full clones.
+  PDB_BRANCH_TEST_RUST                  Also run Rust integration tests when set to 1.
+  PDB_BRANCH_RUST_ROOT_USER             Common CDB user for Rust tests. Default: C##PDB_BRANCH_RUST
+  PDB_BRANCH_RUST_ROOT_PASSWORD         Password for the Rust test user. Default: ORACLE_PWD
   PYTHON                                Python interpreter. Default: python3
 
 Any arguments are forwarded to pytest.
@@ -115,3 +121,25 @@ PDB_BRANCH_ROOT_DSN="localhost:${PORT}/FREE" \
 PDB_BRANCH_BRANCH_DSN_TEMPLATE="localhost:${PORT}/{branch_name}" \
 PDB_BRANCH_SYS_PASSWORD="$ORACLE_PASSWORD" \
 "$VENV_DIR/bin/python" -m pytest bindings/python/tests/integration "$@"
+
+if [[ "$RUN_RUST" == "1" ]]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "error: cargo is not installed or not on PATH" >&2
+        exit 127
+    fi
+
+    PDB_BRANCH_ROOT_DSN="localhost:${PORT}/FREE" \
+    PDB_BRANCH_SYS_PASSWORD="$ORACLE_PASSWORD" \
+    PDB_BRANCH_RUST_ROOT_USER="$RUST_ROOT_USER" \
+    PDB_BRANCH_RUST_ROOT_PASSWORD="$RUST_ROOT_PASSWORD" \
+    "$VENV_DIR/bin/python" "$ROOT_DIR/scripts/prepare-rust-oracle-free-user.py"
+
+    cd "$ROOT_DIR/bindings/rust"
+    PDB_BRANCH_INTEGRATION=1 \
+    PDB_BRANCH_ROOT_DSN="localhost:${PORT}/FREE" \
+    PDB_BRANCH_BRANCH_DSN_TEMPLATE="localhost:${PORT}/{branch_name}" \
+    PDB_BRANCH_RUST_ROOT_USER="$RUST_ROOT_USER" \
+    PDB_BRANCH_RUST_ROOT_PASSWORD="$RUST_ROOT_PASSWORD" \
+    PDB_BRANCH_APP_PASSWORD="${PDB_BRANCH_APP_PASSWORD:-PdbBranch1_}" \
+    cargo test --test oracle_free -- --nocapture
+fi

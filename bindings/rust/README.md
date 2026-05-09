@@ -59,3 +59,12 @@ Run tests:
 ```bash
 cargo test
 ```
+
+Run the Oracle Free integration test from the repository root:
+
+```bash
+PDB_BRANCH_TEST_RUST=1 scripts/run-oracle-free-integration.sh
+```
+
+The Rust integration path uses the default pure-Rust `oracle-rs` backend and the
+shared harness prepares a common CDB control-plane user for it.

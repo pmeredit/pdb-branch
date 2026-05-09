@@ -17,4 +17,4 @@ oracle_rs = { package = "oracle-rs", version = "0.1.7", optional = true }
 thiserror = "2"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }

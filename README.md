@@ -203,6 +203,10 @@ Useful knobs:
 - `PDB_BRANCH_RECREATE_ORACLE=1` removes the named container before starting.
 - `PDB_BRANCH_REMOVE_ORACLE=1` removes the named container after tests finish.
 - `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` also runs the snapshot-copy request path.
+- `PDB_BRANCH_TEST_RUST=1` also runs the Rust Oracle Free integration test
+  against the same container.
+- `PDB_BRANCH_RUST_ROOT_USER=...` selects the common CDB user prepared for the
+  Rust integration test. The default is `C##PDB_BRANCH_RUST`.
 
 The harness keeps and reuses the named Oracle Free container by default because
 database startup is expensive. It creates a local Python virtualenv for the test
@@ -211,6 +215,11 @@ dependencies instead of installing into the system Python environment.
 The default test uses `snapshot_copy=False`. The snapshot-copy request path is
 opt-in; on Oracle Free it still creates a full clone through the library's
 fallback behavior.
+
+The Rust integration test uses the default pure-Rust `oracle-rs` backend. Because
+that backend does not expose SYSDBA authentication, the harness creates or
+updates a common CDB test user with the direct privileges needed to install the
+PL/SQL package and manage PDB branches.
 
 On Linux and WSL2, Podman or Docker can run the Oracle Free container directly.
 On macOS, Podman first has to start a Linux VM (`podman machine`), and that VM
