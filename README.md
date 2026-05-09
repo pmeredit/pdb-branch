@@ -60,15 +60,13 @@ Resource Manager setup additionally needs Resource Manager administration
 privileges.
 
 Snapshot copy behavior depends on the Oracle environment and storage
-configuration. This library assumes the branch can be created with:
+configuration. Branch creation uses Oracle Managed Files via `CREATE_FILE_DEST`,
+preferring `DB_CREATE_FILE_DEST` when it is configured and otherwise deriving a
+destination from the parent PDB datafile directory:
 
 ```sql
-CREATE PLUGGABLE DATABASE branch_name FROM parent_pdb SNAPSHOT COPY
+CREATE PLUGGABLE DATABASE branch_name FROM parent_pdb SNAPSHOT COPY CREATE_FILE_DEST = '/path'
 ```
-
-The first version intentionally avoids `FILE_NAME_CONVERT` and custom storage
-clauses. Use Oracle Managed Files or a platform where the simple snapshot-copy
-form is valid.
 
 ## Python Binding Usage
 

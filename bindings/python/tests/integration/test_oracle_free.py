@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -23,6 +24,19 @@ if os.getenv("PDB_BRANCH_INTEGRATION") != "1":
 oracledb = pytest.importorskip("oracledb")
 
 NAME_RE = re.compile(r"^[A-Z][A-Z0-9_$#]{0,29}$")
+
+
+@dataclass(frozen=True)
+class DatabaseFacts:
+    dsn: str
+    banner: str
+    cdb: str
+    con_name: str
+    db_create_file_dest: str | None
+    pdb_file_name_convert: str | None
+    parent_pdb: str
+    parent_open_mode: str | None
+    parent_restricted: str | None
 
 
 @pytest.mark.parametrize(
@@ -45,18 +59,28 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
     parent_pdb = simple_name(os.getenv("PDB_BRANCH_PARENT_PDB", "FREEPDB1"), "parent PDB")
     app_user = simple_name(os.getenv("PDB_BRANCH_APP_USER", "PDB_BRANCH_APP"), "app user")
     app_password = os.getenv("PDB_BRANCH_APP_PASSWORD", "PdbBranch1_")
-
-    client = BranchClient(root)
+    client: BranchClient | None = None
 
     try:
+        require_cdb_root(root, parent_pdb)
+        client = BranchClient(root)
         prepare_parent_pdb(root, parent_pdb, app_user, app_password)
 
-        client.create_branch(
-            branch_name,
-            from_pdb=parent_pdb,
-            snapshot_copy=snapshot_copy,
-            notes="oracle free integration test",
-        )
+        try:
+            client.create_branch(
+                branch_name,
+                from_pdb=parent_pdb,
+                snapshot_copy=snapshot_copy,
+                notes="oracle free integration test",
+            )
+        except oracledb.DatabaseError as exc:
+            facts = collect_database_facts(root, parent_pdb)
+            pytest.fail(
+                "create_branch failed against Oracle database:\n"
+                f"{format_database_facts(facts)}\n"
+                f"error: {exc}",
+                pytrace=False,
+            )
 
         branch = client.get_branch(branch_name)
         assert branch is not None
@@ -87,8 +111,9 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
         assert scored is not None
         assert scored.score == 0.99
     finally:
-        with suppress(Exception):
-            client.drop_branch(branch_name)
+        if client is not None:
+            with suppress(Exception):
+                client.drop_branch(branch_name)
         with suppress(Exception):
             reopen_parent_read_write(root, parent_pdb)
         root.close()
@@ -103,6 +128,79 @@ def connect_root() -> Any:
         password=password,
         dsn=dsn,
         mode=oracledb.AUTH_MODE_SYSDBA,
+    )
+
+
+def require_cdb_root(root: Any, parent_pdb: str) -> DatabaseFacts:
+    facts = collect_database_facts(root, parent_pdb)
+    problems = []
+    if facts.cdb != "YES":
+        problems.append("database is not a CDB")
+    if facts.con_name != "CDB$ROOT":
+        problems.append(f"connection is in {facts.con_name}, not CDB$ROOT")
+    if facts.parent_open_mode is None:
+        problems.append(f"parent PDB {parent_pdb} was not found")
+
+    if problems:
+        pytest.fail(
+            "Oracle integration tests require a CDB root connection: "
+            f"{'; '.join(problems)}\n{format_database_facts(facts)}",
+            pytrace=False,
+        )
+
+    return facts
+
+
+def collect_database_facts(root: Any, parent_pdb: str) -> DatabaseFacts:
+    params = {
+        row[0]: row[1]
+        for row in rows(
+            root,
+            """
+            SELECT name, value
+              FROM v$parameter
+             WHERE name IN ('db_create_file_dest', 'pdb_file_name_convert')
+            """,
+        )
+    }
+    parent = rows(
+        root,
+        """
+        SELECT open_mode, restricted
+          FROM v$pdbs
+         WHERE name = :1
+        """,
+        [parent_pdb],
+    )
+    parent_open_mode = parent[0][0] if parent else None
+    parent_restricted = parent[0][1] if parent else None
+
+    return DatabaseFacts(
+        dsn=os.getenv("PDB_BRANCH_ROOT_DSN", "localhost:1521/FREE"),
+        banner=scalar(root, "SELECT banner FROM v$version WHERE ROWNUM = 1"),
+        cdb=scalar(root, "SELECT cdb FROM v$database"),
+        con_name=scalar(root, "SELECT SYS_CONTEXT('USERENV', 'CON_NAME') FROM dual"),
+        db_create_file_dest=params.get("db_create_file_dest"),
+        pdb_file_name_convert=params.get("pdb_file_name_convert"),
+        parent_pdb=parent_pdb,
+        parent_open_mode=parent_open_mode,
+        parent_restricted=parent_restricted,
+    )
+
+
+def format_database_facts(facts: DatabaseFacts) -> str:
+    return "\n".join(
+        [
+            f"  dsn: {facts.dsn}",
+            f"  banner: {facts.banner}",
+            f"  cdb: {facts.cdb}",
+            f"  container: {facts.con_name}",
+            f"  db_create_file_dest: {facts.db_create_file_dest or '(unset)'}",
+            f"  pdb_file_name_convert: {facts.pdb_file_name_convert or '(unset)'}",
+            f"  parent_pdb: {facts.parent_pdb}",
+            f"  parent_open_mode: {facts.parent_open_mode or '(missing)'}",
+            f"  parent_restricted: {facts.parent_restricted or '(missing)'}",
+        ]
     )
 
 
@@ -204,13 +302,17 @@ def execute_ignore(connection: Any, sql: str, ignored_codes: set[int]) -> None:
             raise
 
 
-def scalar(connection: Any, sql: str) -> Any:
+def scalar(connection: Any, sql: str, parameters: list[Any] | None = None) -> Any:
+    result = rows(connection, sql, parameters)
+    assert result
+    return result[0][0]
+
+
+def rows(connection: Any, sql: str, parameters: list[Any] | None = None) -> list[Any]:
     cursor = connection.cursor()
     try:
-        cursor.execute(sql)
-        row = cursor.fetchone()
-        assert row is not None
-        return row[0]
+        cursor.execute(sql, parameters or [])
+        return cursor.fetchall()
     finally:
         cursor.close()
 

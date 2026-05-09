@@ -97,6 +97,54 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         RETURN DBMS_ASSERT.ENQUOTE_LITERAL(p_value);
     END qliteral;
 
+    FUNCTION datafile_directory(p_pdb_name IN VARCHAR2) RETURN VARCHAR2 IS
+        v_file_name VARCHAR2(4000);
+        v_pos       PLS_INTEGER;
+    BEGIN
+        EXECUTE IMMEDIATE
+            'SELECT MIN(file_name) FROM cdb_data_files WHERE con_id = ' ||
+            '(SELECT con_id FROM v$pdbs WHERE name = :1)'
+            INTO v_file_name
+            USING p_pdb_name;
+
+        IF v_file_name IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20004, 'no data files found for PDB ' || p_pdb_name);
+        END IF;
+
+        v_pos := GREATEST(INSTR(v_file_name, '/', -1), INSTR(v_file_name, '\', -1));
+        IF v_pos = 0 THEN
+            RAISE_APPLICATION_ERROR(-20005, 'unable to derive datafile directory for PDB ' || p_pdb_name);
+        END IF;
+
+        RETURN SUBSTR(v_file_name, 1, v_pos);
+    END datafile_directory;
+
+    FUNCTION parent_directory(p_directory IN VARCHAR2) RETURN VARCHAR2 IS
+        v_directory VARCHAR2(4000) := RTRIM(p_directory, '/\');
+        v_pos       PLS_INTEGER;
+    BEGIN
+        v_pos := GREATEST(INSTR(v_directory, '/', -1), INSTR(v_directory, '\', -1));
+        IF v_pos = 0 THEN
+            RAISE_APPLICATION_ERROR(-20006, 'unable to derive parent datafile directory');
+        END IF;
+
+        RETURN SUBSTR(v_directory, 1, v_pos);
+    END parent_directory;
+
+    FUNCTION create_file_dest(p_from_pdb IN VARCHAR2) RETURN VARCHAR2 IS
+        v_destination VARCHAR2(4000);
+    BEGIN
+        EXECUTE IMMEDIATE
+            'SELECT value FROM v$parameter WHERE name = ''db_create_file_dest'''
+            INTO v_destination;
+
+        IF v_destination IS NOT NULL THEN
+            RETURN v_destination;
+        END IF;
+
+        RETURN parent_directory(datafile_directory(p_from_pdb));
+    END create_file_dest;
+
     PROCEDURE log_event(
         p_branch_name IN VARCHAR2,
         p_event_type  IN VARCHAR2,
@@ -178,10 +226,13 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         p_expires_at     IN TIMESTAMP WITH TIME ZONE DEFAULT NULL,
         p_notes          IN CLOB DEFAULT NULL
     ) IS
-        v_branch_name VARCHAR2(128) := clean_name(p_branch_name, 'branch name');
-        v_from_pdb    VARCHAR2(128) := clean_name(p_from_pdb, 'parent PDB');
-        v_sql         VARCHAR2(32767);
+        v_branch_name       VARCHAR2(128) := clean_name(p_branch_name, 'branch name');
+        v_from_pdb          VARCHAR2(128) := clean_name(p_from_pdb, 'parent PDB');
+        v_create_file_dest  VARCHAR2(4000);
+        v_sql               VARCHAR2(32767);
     BEGIN
+        v_create_file_dest := create_file_dest(v_from_pdb);
+
         v_sql :=
             'CREATE PLUGGABLE DATABASE ' || qname(v_branch_name, 'branch name') ||
             ' FROM ' || qname(v_from_pdb, 'parent PDB');
@@ -189,6 +240,11 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         IF yes(p_snapshot_copy) THEN
             v_sql := v_sql || ' SNAPSHOT COPY';
         END IF;
+
+        v_sql :=
+            v_sql ||
+            ' CREATE_FILE_DEST = ' ||
+            qliteral(v_create_file_dest);
 
         EXECUTE IMMEDIATE v_sql;
 
