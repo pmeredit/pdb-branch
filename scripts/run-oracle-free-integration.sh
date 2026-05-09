@@ -27,7 +27,7 @@ Environment variables:
   PDB_BRANCH_REMOVE_ORACLE              Remove container after tests when set to 1.
   PDB_BRANCH_RECREATE_ORACLE            Remove existing container before tests when set to 1.
   PDB_BRANCH_TEST_VENV                  Python venv path. Default: .venv-integration
-  PDB_BRANCH_TEST_SNAPSHOT_COPY         Also run SNAPSHOT COPY test when set to 1.
+  PDB_BRANCH_TEST_SNAPSHOT_COPY         Also attempt SNAPSHOT COPY test when set to 1; skips if storage does not support it.
   PYTHON                                Python interpreter. Default: python3
 
 Any arguments are forwarded to pytest.
