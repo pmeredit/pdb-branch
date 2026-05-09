@@ -102,9 +102,10 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         p_event_type  IN VARCHAR2,
         p_details     IN CLOB DEFAULT NULL
     ) IS
+        v_branch_name VARCHAR2(128) := clean_name(p_branch_name, 'branch name');
     BEGIN
         INSERT INTO pdb_branch_events(branch_name, event_type, details)
-        VALUES (clean_name(p_branch_name, 'branch name'), UPPER(p_event_type), p_details);
+        VALUES (v_branch_name, UPPER(p_event_type), p_details);
     END log_event;
 
     PROCEDURE upsert_branch(
