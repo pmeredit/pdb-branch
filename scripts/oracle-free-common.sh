@@ -7,6 +7,9 @@ CONTAINER="${ORACLE_FREE_CONTAINER:-pdb-branch-oracle-free}"
 PORT="${ORACLE_FREE_PORT:-1521}"
 ORACLE_PASSWORD="${ORACLE_PWD:-PdbBranch1_}"
 PYTHON="${PYTHON:-python3}"
+NODE="${NODE:-node}"
+NPM="${NPM:-npm}"
+MAVEN="${MAVEN:-mvn}"
 VENV_DIR="${PDB_BRANCH_TEST_VENV:-${ROOT_DIR}/.venv-integration}"
 STARTUP_TIMEOUT_SECONDS="${ORACLE_FREE_STARTUP_TIMEOUT_SECONDS:-1800}"
 REMOVE_CONTAINER="${PDB_BRANCH_REMOVE_ORACLE:-0}"
@@ -30,6 +33,19 @@ oracle_free_usage_python() {
     cat <<'USAGE'
   PDB_BRANCH_TEST_VENV                  Python helper venv path. Default: .venv-integration
   PYTHON                                Python interpreter. Default: python3
+USAGE
+}
+
+oracle_free_usage_node() {
+    cat <<'USAGE'
+  NODE                                  Node.js executable. Default: node
+  NPM                                   npm executable. Default: npm
+USAGE
+}
+
+oracle_free_usage_java() {
+    cat <<'USAGE'
+  MAVEN                                 Maven executable. Default: mvn
 USAGE
 }
 

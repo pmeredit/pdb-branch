@@ -233,6 +233,19 @@ Rust-specific knobs:
 - `PDB_BRANCH_SYS_PASSWORD=...` sets that user's password. The default is
   `ORACLE_PWD`.
 
+Run the Node.js and Java Oracle Free integration tests with their own entry
+scripts:
+
+```bash
+scripts/run-node-oracle-free-integration.sh
+scripts/run-java-oracle-free-integration.sh
+```
+
+The Node.js script installs `oracledb` into `bindings/node/node_modules` when it
+is not already present. The Java script runs the `OracleFreeIntegrationTest`
+Maven test class. When `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` is set, both tests
+assert the Oracle Free fallback event and print the fallback warning text.
+
 On Linux and WSL2, Podman or Docker can run the Oracle Free container directly.
 On macOS, Podman first has to start a Linux VM (`podman machine`), and that VM
 provider can be its own source of failure. The test harness itself does not rely

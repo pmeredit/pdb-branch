@@ -37,6 +37,23 @@ export class BranchClient {
     ]);
   }
 
+  async createBranchWithResult(branchName, options = {}) {
+    const snapshotCopyRequested = options.snapshotCopy ?? true;
+    const lastEventId = snapshotCopyRequested ? await this.maxEventId(branchName) : null;
+
+    await this.createBranch(branchName, options);
+
+    const fallbackWarning = snapshotCopyRequested
+      ? await this.snapshotFallbackWarning(branchName, lastEventId)
+      : null;
+
+    return {
+      snapshotCopyRequested,
+      snapshotCopyFellBack: fallbackWarning !== null,
+      fallbackWarning
+    };
+  }
+
   async openBranch(branchName, options = {}) {
     await this.call("pdb_branch.open_branch", [branchName, options.profileName ?? null]);
   }
@@ -88,6 +105,61 @@ export class BranchClient {
     await this.connection.execute(`BEGIN ${name}(${placeholders}); END;`, args, {
       autoCommit: this.autoCommit
     });
+  }
+
+  async maxEventId(branchName) {
+    const value = await this.queryOptionalValue(
+      `
+      SELECT TO_CHAR(MAX(event_id))
+        FROM pdb_branch_events
+       WHERE branch_name = UPPER(:1)
+      `,
+      [branchName]
+    );
+
+    return value === null ? null : Number.parseInt(String(value), 10);
+  }
+
+  async snapshotFallbackWarning(branchName, lastEventId) {
+    const binds = [branchName];
+    const eventIdFilter = lastEventId === null ? "" : "AND event_id > :2";
+    if (lastEventId !== null) {
+      binds.push(lastEventId);
+    }
+
+    const value = await this.queryOptionalValue(
+      `
+      SELECT warning
+        FROM (
+              SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
+                FROM pdb_branch_events
+               WHERE branch_name = UPPER(:1)
+                 AND event_type = 'SNAPSHOT_COPY_FALLBACK'
+                 ${eventIdFilter}
+               ORDER BY event_id DESC
+             )
+       WHERE ROWNUM = 1
+      `,
+      binds
+    );
+
+    return value === null ? null : String(value);
+  }
+
+  async queryOptionalValue(sql, binds = []) {
+    const result = await this.connection.execute(sql, binds);
+    const rows = result.rows ?? [];
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const row = rows[0];
+    if (Array.isArray(row)) {
+      return row[0] ?? null;
+    }
+
+    const values = Object.values(row);
+    return values[0] ?? null;
   }
 }
 

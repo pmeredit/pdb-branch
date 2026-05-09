@@ -4,12 +4,20 @@ import test from "node:test";
 import { BranchClient, readSqlScript, splitSqlPlusScript } from "../src/index.js";
 
 class FakeConnection {
-  constructor() {
+  constructor(options = {}) {
     this.executions = [];
+    this.queries = [];
+    this.queryResults = [...(options.queryResults ?? [])];
     this.commits = 0;
   }
 
   async execute(sql, binds = [], options = {}) {
+    if (/^\s*SELECT\b/iu.test(sql)) {
+      this.queries.push({ sql, binds });
+      const value = this.queryResults.shift();
+      return value === undefined ? { rows: [] } : { rows: [[value]] };
+    }
+
     this.executions.push({ sql, binds, options });
     return {};
   }
@@ -57,6 +65,28 @@ test("createBranch calls PL/SQL package", async () => {
       options: { autoCommit: false }
     }
   ]);
+});
+
+test("createBranchWithResult reports snapshot fallback", async () => {
+  const warning = "WARNING: SNAPSHOT COPY requested on Oracle Free; created with full clone";
+  const connection = new FakeConnection({ queryResults: ["10", warning] });
+  const client = new BranchClient(connection);
+
+  const result = await client.createBranchWithResult("AGENT_RAG_042", {
+    fromPdb: "GOLDEN_MASTER",
+    snapshotCopy: true,
+    notes: "try chunking"
+  });
+
+  assert.deepEqual(result, {
+    snapshotCopyRequested: true,
+    snapshotCopyFellBack: true,
+    fallbackWarning: warning
+  });
+  assert.equal(connection.queries.length, 2);
+  assert.match(connection.queries[0].sql, /MAX\(event_id\)/u);
+  assert.match(connection.queries[1].sql, /SNAPSHOT_COPY_FALLBACK/u);
+  assert.deepEqual(connection.queries[1].binds, ["AGENT_RAG_042", 10]);
 });
 
 test("ensureInstalled executes shared SQL statements and commits", async () => {

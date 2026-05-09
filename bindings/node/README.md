@@ -26,3 +26,9 @@ Run tests:
 ```bash
 npm test
 ```
+
+Run the Oracle Free integration test from the repository root:
+
+```bash
+scripts/run-node-oracle-free-integration.sh
+```

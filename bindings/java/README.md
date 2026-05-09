@@ -18,3 +18,9 @@ Run tests:
 ```bash
 mvn test
 ```
+
+Run the Oracle Free integration test from the repository root:
+
+```bash
+scripts/run-java-oracle-free-integration.sh
+```

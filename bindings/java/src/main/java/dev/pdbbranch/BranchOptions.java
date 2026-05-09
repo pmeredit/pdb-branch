@@ -18,6 +18,10 @@ public record BranchOptions(
         return new BranchOptions(value, snapshotCopy, openBranch, profileName, expiresAt, notes);
     }
 
+    public BranchOptions withSnapshotCopy(boolean value) {
+        return new BranchOptions(fromPdb, value, openBranch, profileName, expiresAt, notes);
+    }
+
     public BranchOptions withNotes(String value) {
         return new BranchOptions(fromPdb, snapshotCopy, openBranch, profileName, expiresAt, value);
     }

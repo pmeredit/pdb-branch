@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 
 public final class BranchClient {
     private final SqlExecutor executor;
@@ -33,6 +34,22 @@ public final class BranchClient {
                 nullable(options.expiresAt()),
                 nullable(options.notes())
         ));
+    }
+
+    public BranchCreateResult createBranchWithResult(String branchName, BranchOptions options) throws SQLException {
+        boolean snapshotCopyRequested = options.snapshotCopy();
+        Optional<Long> lastEventId = snapshotCopyRequested ? maxEventId(branchName) : Optional.empty();
+
+        createBranch(branchName, options);
+
+        Optional<String> fallbackWarning = snapshotCopyRequested
+                ? snapshotFallbackWarning(branchName, lastEventId)
+                : Optional.empty();
+        return new BranchCreateResult(
+                snapshotCopyRequested,
+                fallbackWarning.isPresent(),
+                fallbackWarning.orElse(null)
+        );
     }
 
     public void openBranch(String branchName, String profileName) throws SQLException {
@@ -73,11 +90,52 @@ public final class BranchClient {
 
     private void call(String name, List<Object> binds) throws SQLException {
         List<String> placeholders = new ArrayList<>();
-        for (int i = 1; i <= binds.size(); i++) {
-            placeholders.add(":" + i);
+        for (int i = 0; i < binds.size(); i++) {
+            placeholders.add("?");
         }
         String sql = "BEGIN " + name + "(" + String.join(", ", placeholders) + "); END;";
         executor.execute(sql, binds);
+    }
+
+    private Optional<Long> maxEventId(String branchName) throws SQLException {
+        Optional<String> value = executor.queryOptionalString(
+                """
+                SELECT TO_CHAR(MAX(event_id))
+                  FROM pdb_branch_events
+                 WHERE branch_name = UPPER(?)
+                """,
+                List.of(branchName)
+        );
+        return value.map(Long::parseLong);
+    }
+
+    private Optional<String> snapshotFallbackWarning(
+            String branchName,
+            Optional<Long> lastEventId
+    ) throws SQLException {
+        List<Object> binds = new ArrayList<>();
+        binds.add(branchName);
+        String eventIdFilter = "";
+        if (lastEventId.isPresent()) {
+            eventIdFilter = "AND event_id > ?";
+            binds.add(lastEventId.get());
+        }
+
+        return executor.queryOptionalString(
+                """
+                SELECT warning
+                  FROM (
+                        SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
+                          FROM pdb_branch_events
+                         WHERE branch_name = UPPER(?)
+                           AND event_type = 'SNAPSHOT_COPY_FALLBACK'
+                           %s
+                         ORDER BY event_id DESC
+                       )
+                 WHERE ROWNUM = 1
+                """.formatted(eventIdFilter),
+                binds
+        );
     }
 
     private static String yn(boolean value) {
