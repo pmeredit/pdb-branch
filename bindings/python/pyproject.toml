@@ -36,3 +36,6 @@ target-version = "py39"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: tests that require a live Oracle Database CDB",
+]

@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNTIME="${CONTAINER_RUNTIME:-podman}"
+IMAGE="${ORACLE_FREE_IMAGE:-container-registry.oracle.com/database/free:latest}"
+CONTAINER="${ORACLE_FREE_CONTAINER:-pdb-branch-oracle-free}"
+PORT="${ORACLE_FREE_PORT:-1521}"
+ORACLE_PASSWORD="${ORACLE_PWD:-PdbBranch1_}"
+PYTHON="${PYTHON:-python3}"
+STARTUP_TIMEOUT_SECONDS="${ORACLE_FREE_STARTUP_TIMEOUT_SECONDS:-1800}"
+KEEP_CONTAINER="${PDB_BRANCH_KEEP_ORACLE:-0}"
+STARTED_CONTAINER=0
+
+usage() {
+    cat <<'USAGE'
+Run pdb-branch integration tests against an Oracle Database Free container.
+
+Environment variables:
+  CONTAINER_RUNTIME                     podman or docker. Default: podman
+  ORACLE_FREE_IMAGE                     Oracle Free image. Default: container-registry.oracle.com/database/free:latest
+  ORACLE_FREE_CONTAINER                 Container name. Default: pdb-branch-oracle-free
+  ORACLE_FREE_PORT                      Host listener port. Default: 1521
+  ORACLE_PWD                            SYS password. Default: PdbBranch1_
+  ORACLE_FREE_STARTUP_TIMEOUT_SECONDS   Startup wait timeout. Default: 1800
+  PDB_BRANCH_KEEP_ORACLE                Keep container after tests when set to 1.
+  PDB_BRANCH_TEST_SNAPSHOT_COPY         Also run SNAPSHOT COPY test when set to 1.
+  PYTHON                                Python interpreter. Default: python3
+
+Any arguments are forwarded to pytest.
+USAGE
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+if ! command -v "$RUNTIME" >/dev/null 2>&1; then
+    echo "error: $RUNTIME is not installed or not on PATH" >&2
+    exit 127
+fi
+
+cleanup() {
+    if [[ "$STARTED_CONTAINER" == "1" && "$KEEP_CONTAINER" != "1" ]]; then
+        "$RUNTIME" rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    fi
+}
+trap cleanup EXIT
+
+container_exists() {
+    "$RUNTIME" inspect "$CONTAINER" >/dev/null 2>&1
+}
+
+container_running() {
+    [[ "$("$RUNTIME" inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == "true" ]]
+}
+
+if container_exists; then
+    if ! container_running; then
+        "$RUNTIME" start "$CONTAINER" >/dev/null
+    fi
+else
+    "$RUNTIME" run \
+        --detach \
+        --name "$CONTAINER" \
+        --publish "${PORT}:1521" \
+        --env "ORACLE_PWD=${ORACLE_PASSWORD}" \
+        "$IMAGE" >/dev/null
+    STARTED_CONTAINER=1
+fi
+
+deadline=$((SECONDS + STARTUP_TIMEOUT_SECONDS))
+while (( SECONDS < deadline )); do
+    health="$("$RUNTIME" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
+    if [[ "$health" == "healthy" ]]; then
+        break
+    fi
+
+    if "$RUNTIME" logs "$CONTAINER" 2>&1 | grep -q "DATABASE IS READY TO USE"; then
+        break
+    fi
+
+    printf 'waiting for Oracle Free container %s, current status: %s\n' "$CONTAINER" "${health:-unknown}"
+    sleep 15
+done
+
+health="$("$RUNTIME" inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER" 2>/dev/null || true)"
+if [[ "$health" != "healthy" ]] && ! "$RUNTIME" logs "$CONTAINER" 2>&1 | grep -q "DATABASE IS READY TO USE"; then
+    "$RUNTIME" logs --tail 200 "$CONTAINER" >&2 || true
+    echo "error: Oracle Free container did not become ready within ${STARTUP_TIMEOUT_SECONDS}s" >&2
+    exit 1
+fi
+
+cd "$ROOT_DIR/bindings/python"
+"$PYTHON" -m pip install -e '.[dev]'
+
+cd "$ROOT_DIR"
+PDB_BRANCH_INTEGRATION=1 \
+PDB_BRANCH_ROOT_DSN="localhost:${PORT}/FREE" \
+PDB_BRANCH_BRANCH_DSN_TEMPLATE="localhost:${PORT}/{branch_name}" \
+PDB_BRANCH_SYS_PASSWORD="$ORACLE_PASSWORD" \
+"$PYTHON" -m pytest bindings/python/tests/integration "$@"

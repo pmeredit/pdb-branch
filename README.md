@@ -46,6 +46,7 @@ copy-on-write behavior this project is designed around.
 ## Repository Layout
 
 - `sql/` - shared PL/SQL install scripts
+- `scripts/` - local development and integration test helpers
 - `bindings/python/` - Python binding
 - `bindings/node/` - Node.js binding
 - `bindings/rust/` - Rust binding; defaults to `oracle-rs` and can use the
@@ -163,6 +164,44 @@ branches.record_score(
 Once a branch PDB is open, there is no special "branch query" mode. The branch is
 just an isolated Oracle PDB service; agents run the same SQL they would run
 against any other Oracle database.
+
+## Oracle Free Integration Tests
+
+The integration harness starts Oracle Database Free in a container, installs the
+Python binding, installs the shared PL/SQL package into `CDB$ROOT`, prepares
+`FREEPDB1` as a parent PDB, creates a branch PDB, connects to that branch as a
+normal app user, writes branch-local data, records a score, and drops the branch.
+
+```bash
+scripts/run-oracle-free-integration.sh
+```
+
+By default the harness uses Podman and the full Oracle Free image:
+
+```bash
+ORACLE_FREE_IMAGE=container-registry.oracle.com/database/free:latest \
+  scripts/run-oracle-free-integration.sh
+```
+
+Useful knobs:
+
+- `CONTAINER_RUNTIME=docker` uses Docker instead of Podman.
+- `ORACLE_FREE_IMAGE=container-registry.oracle.com/database/free:latest-lite`
+  uses the smaller image for smoke tests.
+- `ORACLE_PWD=...` sets the `SYS` password used when starting a new container.
+- `ORACLE_FREE_PORT=1522` maps the listener to a non-default host port.
+- `PDB_BRANCH_KEEP_ORACLE=1` leaves the container running after the test.
+- `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` also runs the `SNAPSHOT COPY` variant.
+
+The default test uses `snapshot_copy=False` because local Docker storage often
+does not satisfy Oracle's storage-snapshot requirements. The snapshot-copy test
+is opt-in so environments with compatible storage can exercise the cheap
+copy-on-write path directly.
+
+On Linux and WSL2, Podman or Docker can run the Oracle Free container directly.
+On macOS, Podman first has to start a Linux VM (`podman machine`), and that VM
+provider can be its own source of failure. The test harness itself does not rely
+on macOS-specific behavior.
 
 ## Optional Resource Profiles
 

@@ -10,3 +10,9 @@ python -m pytest
 ```
 
 Use `pdb_branch.BranchClient` with a privileged connection to `CDB$ROOT`.
+
+Run the Oracle Free integration harness from the repo root:
+
+```bash
+scripts/run-oracle-free-integration.sh
+```
