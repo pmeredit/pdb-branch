@@ -112,6 +112,9 @@ async fn run_branch_lifecycle_inner(
             create_result.snapshot_copy_fell_back,
             "create_branch result should report snapshot-copy fallback",
         )?;
+        if let Some(warning) = &create_result.fallback_warning {
+            eprintln!("{warning}");
+        }
         ensure(
             create_result
                 .fallback_warning
