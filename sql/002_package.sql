@@ -445,10 +445,10 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
     BEGIN
         EXECUTE IMMEDIATE 'BEGIN DBMS_RESOURCE_MANAGER.CREATE_PENDING_AREA(); END;';
 
-        SELECT COUNT(*)
-          INTO v_exists
-          FROM dba_cdb_rsrc_plans
-         WHERE plan = v_plan_name;
+        EXECUTE IMMEDIATE
+            'SELECT COUNT(*) FROM dba_cdb_rsrc_plans WHERE plan = :1'
+            INTO v_exists
+            USING v_plan_name;
 
         IF v_exists = 0 THEN
             EXECUTE IMMEDIATE

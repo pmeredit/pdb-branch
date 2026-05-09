@@ -41,7 +41,7 @@ NAME_RE = re.compile(r"^[A-Z][A-Z0-9_$#]{0,29}$")
 )
 def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
     root = connect_root()
-    branch_name = test_branch_name("PBISC" if snapshot_copy else "PBIFC")
+    branch_name = make_branch_name("PBISC" if snapshot_copy else "PBIFC")
     parent_pdb = simple_name(os.getenv("PDB_BRANCH_PARENT_PDB", "FREEPDB1"), "parent PDB")
     app_user = simple_name(os.getenv("PDB_BRANCH_APP_USER", "PDB_BRANCH_APP"), "app user")
     app_password = os.getenv("PDB_BRANCH_APP_PASSWORD", "PdbBranch1_")
@@ -222,7 +222,7 @@ def error_code(exc: BaseException) -> int | None:
     return getattr(error, "code", None)
 
 
-def test_branch_name(prefix: str) -> str:
+def make_branch_name(prefix: str) -> str:
     return simple_name(f"{prefix}{uuid.uuid4().hex[:8].upper()}", "branch name")
 
 

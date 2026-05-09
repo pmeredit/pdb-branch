@@ -23,6 +23,7 @@ def ensure_installed(connection: Any) -> None:
 
     for name in SQL_SCRIPTS:
         run_script(connection, name)
+    verify_installed(connection)
 
 
 def run_script(connection: Any, script_name: str) -> None:
@@ -34,6 +35,47 @@ def run_script(connection: Any, script_name: str) -> None:
     finally:
         cursor.close()
     connection.commit()
+
+
+def verify_installed(connection: Any) -> None:
+    """Fail fast if Oracle compiled the PL/SQL package with errors."""
+
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT object_type
+              FROM user_objects
+             WHERE object_name = 'PDB_BRANCH'
+               AND object_type IN ('PACKAGE', 'PACKAGE BODY')
+               AND status <> 'VALID'
+             ORDER BY object_type
+            """
+        )
+        invalid_objects = [row[0] for row in cursor.fetchall()]
+        if not invalid_objects:
+            return
+
+        cursor.execute(
+            """
+            SELECT type, line, position, text
+              FROM user_errors
+             WHERE name = 'PDB_BRANCH'
+             ORDER BY sequence
+            """
+        )
+        errors = [
+            f"{row[0]} line {row[1]}, position {row[2]}: {row[3]}"
+            for row in cursor.fetchall()
+        ]
+    finally:
+        cursor.close()
+
+    details = "\n".join(errors) if errors else "no compiler diagnostics returned"
+    raise RuntimeError(
+        "PDB_BRANCH PL/SQL package failed to compile: "
+        f"{', '.join(invalid_objects)}\n{details}"
+    )
 
 
 def read_script(script_name: str) -> str:
