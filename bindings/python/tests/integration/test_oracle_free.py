@@ -24,7 +24,6 @@ if os.getenv("PDB_BRANCH_INTEGRATION") != "1":
 oracledb = pytest.importorskip("oracledb")
 
 NAME_RE = re.compile(r"^[A-Z][A-Z0-9_$#]{0,29}$")
-SNAPSHOT_COPY_UNSUPPORTED_CODES = {17525, 65169}
 
 
 @dataclass(frozen=True)
@@ -63,8 +62,7 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
     client: BranchClient | None = None
 
     try:
-        facts = require_cdb_root(root, parent_pdb)
-        effective_snapshot_copy = snapshot_copy and not is_oracle_free(facts)
+        require_cdb_root(root, parent_pdb)
         client = BranchClient(root)
         prepare_parent_pdb(root, parent_pdb, app_user, app_password)
 
@@ -72,17 +70,11 @@ def test_oracle_free_branch_lifecycle(snapshot_copy: bool) -> None:
             client.create_branch(
                 branch_name,
                 from_pdb=parent_pdb,
-                snapshot_copy=effective_snapshot_copy,
+                snapshot_copy=snapshot_copy,
                 notes="oracle free integration test",
             )
         except oracledb.DatabaseError as exc:
             facts = collect_database_facts(root, parent_pdb)
-            if snapshot_copy and snapshot_copy_unsupported(exc):
-                pytest.skip(
-                    "SNAPSHOT COPY is not supported by this Oracle storage backend:\n"
-                    f"{format_database_facts(facts)}\n"
-                    f"error: {exc}"
-                )
             pytest.fail(
                 "create_branch failed against Oracle database:\n"
                 f"{format_database_facts(facts)}\n"
@@ -330,19 +322,6 @@ def error_code(exc: BaseException) -> int | None:
         return None
     error = exc.args[0]
     return getattr(error, "code", None)
-
-
-def snapshot_copy_unsupported(exc: BaseException) -> bool:
-    code = error_code(exc)
-    if code in SNAPSHOT_COPY_UNSUPPORTED_CODES:
-        return True
-
-    message = str(exc)
-    return any(f"ORA-{unsupported_code}" in message for unsupported_code in SNAPSHOT_COPY_UNSUPPORTED_CODES)
-
-
-def is_oracle_free(facts: DatabaseFacts) -> bool:
-    return "FREE" in facts.banner.upper()
 
 
 def make_branch_name(prefix: str) -> str:

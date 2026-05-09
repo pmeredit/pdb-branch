@@ -145,6 +145,51 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         RETURN parent_directory(datafile_directory(p_from_pdb));
     END create_file_dest;
 
+    FUNCTION database_banner RETURN VARCHAR2 IS
+        v_banner VARCHAR2(4000);
+    BEGIN
+        EXECUTE IMMEDIATE 'SELECT banner FROM v$version WHERE ROWNUM = 1'
+            INTO v_banner;
+        RETURN v_banner;
+    END database_banner;
+
+    FUNCTION is_oracle_free RETURN BOOLEAN IS
+    BEGIN
+        RETURN INSTR(UPPER(NVL(database_banner, '')), 'FREE') > 0;
+    END is_oracle_free;
+
+    FUNCTION snapshot_copy_unsupported(
+        p_error_code     IN NUMBER,
+        p_error_message  IN VARCHAR2
+    ) RETURN BOOLEAN IS
+    BEGIN
+        RETURN p_error_code IN (-17525, -65169) OR
+               INSTR(p_error_message, 'ORA-17525') > 0 OR
+               INSTR(p_error_message, 'ORA-65169') > 0;
+    END snapshot_copy_unsupported;
+
+    FUNCTION create_branch_sql(
+        p_branch_name       IN VARCHAR2,
+        p_from_pdb          IN VARCHAR2,
+        p_create_file_dest  IN VARCHAR2,
+        p_snapshot_copy     IN BOOLEAN
+    ) RETURN VARCHAR2 IS
+        v_sql VARCHAR2(32767);
+    BEGIN
+        v_sql :=
+            'CREATE PLUGGABLE DATABASE ' || qname(p_branch_name, 'branch name') ||
+            ' FROM ' || qname(p_from_pdb, 'parent PDB');
+
+        IF p_snapshot_copy THEN
+            v_sql := v_sql || ' SNAPSHOT COPY';
+        END IF;
+
+        RETURN
+            v_sql ||
+            ' CREATE_FILE_DEST = ' ||
+            qliteral(p_create_file_dest);
+    END create_branch_sql;
+
     PROCEDURE log_event(
         p_branch_name IN VARCHAR2,
         p_event_type  IN VARCHAR2,
@@ -229,24 +274,41 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         v_branch_name       VARCHAR2(128) := clean_name(p_branch_name, 'branch name');
         v_from_pdb          VARCHAR2(128) := clean_name(p_from_pdb, 'parent PDB');
         v_create_file_dest  VARCHAR2(4000);
+        v_requested_snapshot BOOLEAN := yes(p_snapshot_copy);
+        v_used_snapshot      BOOLEAN;
+        v_error_code         NUMBER;
+        v_error_message      VARCHAR2(4000);
         v_sql               VARCHAR2(32767);
     BEGIN
         v_create_file_dest := create_file_dest(v_from_pdb);
+        v_used_snapshot := v_requested_snapshot AND NOT is_oracle_free;
 
-        v_sql :=
-            'CREATE PLUGGABLE DATABASE ' || qname(v_branch_name, 'branch name') ||
-            ' FROM ' || qname(v_from_pdb, 'parent PDB');
+        v_sql := create_branch_sql(
+            v_branch_name,
+            v_from_pdb,
+            v_create_file_dest,
+            v_used_snapshot
+        );
 
-        IF yes(p_snapshot_copy) THEN
-            v_sql := v_sql || ' SNAPSHOT COPY';
-        END IF;
-
-        v_sql :=
-            v_sql ||
-            ' CREATE_FILE_DEST = ' ||
-            qliteral(v_create_file_dest);
-
-        EXECUTE IMMEDIATE v_sql;
+        BEGIN
+            EXECUTE IMMEDIATE v_sql;
+        EXCEPTION
+            WHEN OTHERS THEN
+                v_error_code := SQLCODE;
+                v_error_message := SQLERRM;
+                IF v_used_snapshot AND snapshot_copy_unsupported(v_error_code, v_error_message) THEN
+                    v_used_snapshot := FALSE;
+                    v_sql := create_branch_sql(
+                        v_branch_name,
+                        v_from_pdb,
+                        v_create_file_dest,
+                        v_used_snapshot
+                    );
+                    EXECUTE IMMEDIATE v_sql;
+                ELSE
+                    RAISE;
+                END IF;
+        END;
 
         upsert_branch(
             p_branch_name  => v_branch_name,
@@ -257,6 +319,9 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
             p_notes        => p_notes
         );
         log_event(v_branch_name, 'CREATE_BRANCH', v_sql);
+        IF v_requested_snapshot AND NOT v_used_snapshot THEN
+            log_event(v_branch_name, 'SNAPSHOT_COPY_FALLBACK', 'created with full clone');
+        END IF;
         COMMIT;
 
         IF yes(p_open) THEN

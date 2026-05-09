@@ -31,9 +31,11 @@ Expected support:
 
 Snapshot-copy support is not just a database-version question. The source PDB,
 database parameters, and underlying storage must satisfy Oracle's Snapshot Copy
-PDB requirements. If storage snapshots are unavailable, use ordinary PDB clones
-by passing `snapshot_copy=False`, but those clones will not have the cheap
-copy-on-write behavior this project is designed around.
+PDB requirements. When `snapshot_copy=True`, the library requests `SNAPSHOT COPY`
+where it is expected to work, but falls back to ordinary full PDB clones on
+Oracle Free and when Oracle reports that storage snapshots are unsupported. Full
+clones preserve correctness but do not have the cheap copy-on-write behavior this
+project is designed around.
 
 ## Shape
 
@@ -68,10 +70,11 @@ destination from the parent PDB datafile directory:
 CREATE PLUGGABLE DATABASE branch_name FROM parent_pdb SNAPSHOT COPY CREATE_FILE_DEST = '/path'
 ```
 
-The Oracle Free integration harness uses full clones when connected to Oracle
-Free, because the default Oracle Free container data directory does not support
-storage snapshots. For non-Free databases, the optional snapshot-copy integration
-test skips when Oracle reports `ORA-17525` or `ORA-65169`.
+When the library is connected to Oracle Free, `snapshot_copy=True` is treated as
+a full clone because the default Oracle Free container data directory does not
+support storage snapshots. On non-Free databases, `snapshot_copy=True` attempts
+`SNAPSHOT COPY` first and retries as a full clone if Oracle reports `ORA-17525`
+or `ORA-65169`.
 
 ## Python Binding Usage
 
@@ -197,16 +200,15 @@ Useful knobs:
   `.venv-integration`.
 - `PDB_BRANCH_RECREATE_ORACLE=1` removes the named container before starting.
 - `PDB_BRANCH_REMOVE_ORACLE=1` removes the named container after tests finish.
-- `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` also runs the `SNAPSHOT COPY` variant.
+- `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` also runs the snapshot-copy request path.
 
 The harness keeps and reuses the named Oracle Free container by default because
 database startup is expensive. It creates a local Python virtualenv for the test
 dependencies instead of installing into the system Python environment.
 
-The default test uses `snapshot_copy=False` because local Docker storage often
-does not satisfy Oracle's storage-snapshot requirements. The snapshot-copy test
-is opt-in so environments with compatible storage can exercise the cheap
-copy-on-write path directly.
+The default test uses `snapshot_copy=False`. The snapshot-copy request path is
+opt-in; on Oracle Free it still creates a full clone through the library's
+fallback behavior.
 
 On Linux and WSL2, Podman or Docker can run the Oracle Free container directly.
 On macOS, Podman first has to start a Linux VM (`podman machine`), and that VM
