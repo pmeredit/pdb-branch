@@ -105,6 +105,32 @@ impl SqlExecutor for OracleRsExecutor {
             .and_then(|row| row.get_string(0))
             .map(str::to_owned))
     }
+
+    async fn query_rows(&self, sql: &str, binds: &[BindValue]) -> Result<Vec<Vec<Option<String>>>> {
+        let values = binds.iter().map(to_oracle_rs_value).collect::<Vec<_>>();
+        let result = self
+            .connection
+            .query(sql, &values)
+            .await
+            .map_err(|err| Error::Database(err.to_string()))?;
+
+        Ok(result
+            .rows
+            .iter()
+            .map(|row| {
+                row.values()
+                    .iter()
+                    .map(|value| {
+                        if value.is_null() {
+                            None
+                        } else {
+                            Some(value.to_string())
+                        }
+                    })
+                    .collect()
+            })
+            .collect())
+    }
 }
 
 #[cfg(feature = "oracle-rs")]
@@ -188,6 +214,40 @@ impl SqlExecutor for RustOracleExecutor {
         row.get::<_, Option<String>>(0)
             .map_err(|err| Error::Database(err.to_string()))
     }
+
+    async fn query_rows(&self, sql: &str, binds: &[BindValue]) -> Result<Vec<Vec<Option<String>>>> {
+        use oracle::sql_type::ToSql;
+
+        let values = binds.iter().map(RustOracleBind::from).collect::<Vec<_>>();
+        let params = values
+            .iter()
+            .map(|value| match value {
+                RustOracleBind::Null(value) => value as &dyn ToSql,
+                RustOracleBind::String(value) => value as &dyn ToSql,
+                RustOracleBind::Number(value) => value as &dyn ToSql,
+            })
+            .collect::<Vec<_>>();
+
+        let mut rows = self
+            .connection
+            .query(sql, &params)
+            .map_err(|err| Error::Database(err.to_string()))?;
+        let mut result = Vec::new();
+
+        while let Some(row) = rows.next() {
+            let row = row.map_err(|err| Error::Database(err.to_string()))?;
+            let mut values = Vec::with_capacity(row.column_info().len());
+            for index in 0..row.column_info().len() {
+                values.push(
+                    row.get::<_, Option<String>>(index)
+                        .map_err(|err| Error::Database(err.to_string()))?,
+                );
+            }
+            result.push(values);
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(feature = "rust-oracle")]
@@ -219,6 +279,16 @@ pub trait SqlExecutor {
     ) -> Result<Option<String>> {
         Err(Error::Database(
             "executor does not support scalar string queries".to_owned(),
+        ))
+    }
+
+    async fn query_rows(
+        &self,
+        _sql: &str,
+        _binds: &[BindValue],
+    ) -> Result<Vec<Vec<Option<String>>>> {
+        Err(Error::Database(
+            "executor does not support row queries".to_owned(),
         ))
     }
 
@@ -377,6 +447,31 @@ where
         .await
     }
 
+    pub async fn get_branch(&self, branch_name: &str) -> Result<Option<BranchInfo>> {
+        let sql = branch_select_sql("WHERE branch_name = UPPER(:1)");
+        let rows = self
+            .executor
+            .query_rows(&sql, &[branch_name.into()])
+            .await?;
+
+        rows.into_iter()
+            .next()
+            .map(BranchInfo::from_row)
+            .transpose()
+    }
+
+    pub async fn list_branches(&self, include_dropped: bool) -> Result<Vec<BranchInfo>> {
+        let where_clause = if include_dropped {
+            ""
+        } else {
+            "WHERE status <> 'DROPPED'"
+        };
+        let sql = branch_select_sql(where_clause);
+        let rows = self.executor.query_rows(&sql, &[]).await?;
+
+        rows.into_iter().map(BranchInfo::from_row).collect()
+    }
+
     async fn call(&self, name: &str, binds: &[BindValue]) -> Result<()> {
         let placeholders = (1..=binds.len())
             .map(|i| format!(":{i}"))
@@ -438,6 +533,69 @@ pub struct CreateBranchResult {
     pub snapshot_copy_requested: bool,
     pub snapshot_copy_fell_back: bool,
     pub fallback_warning: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BranchInfo {
+    pub branch_name: String,
+    pub parent_pdb: Option<String>,
+    pub status: String,
+    pub profile_name: Option<String>,
+    pub created_at: Option<String>,
+    pub opened_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub dropped_at: Option<String>,
+    pub last_activity_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub score: Option<f64>,
+    pub notes: Option<String>,
+}
+
+impl BranchInfo {
+    fn from_row(mut row: Vec<Option<String>>) -> Result<Self> {
+        if row.len() != 12 {
+            return Err(Error::Database(format!(
+                "expected 12 branch columns, got {}",
+                row.len()
+            )));
+        }
+
+        let notes = row.pop().flatten();
+        let score = row
+            .pop()
+            .flatten()
+            .map(|value| {
+                value
+                    .parse::<f64>()
+                    .map_err(|err| Error::Database(format!("invalid score value: {err}")))
+            })
+            .transpose()?;
+        let expires_at = row.pop().flatten();
+        let last_activity_at = row.pop().flatten();
+        let dropped_at = row.pop().flatten();
+        let closed_at = row.pop().flatten();
+        let opened_at = row.pop().flatten();
+        let created_at = row.pop().flatten();
+        let profile_name = row.pop().flatten();
+        let status = required_column(row.pop().flatten(), "status")?;
+        let parent_pdb = row.pop().flatten();
+        let branch_name = required_column(row.pop().flatten(), "branch_name")?;
+
+        Ok(Self {
+            branch_name,
+            parent_pdb,
+            status,
+            profile_name,
+            created_at,
+            opened_at,
+            closed_at,
+            dropped_at,
+            last_activity_at,
+            expires_at,
+            score,
+            notes,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -529,6 +687,32 @@ fn optional(value: Option<&str>) -> BindValue {
     value.map_or(BindValue::Null, BindValue::from)
 }
 
+fn branch_select_sql(where_clause: &str) -> String {
+    format!(
+        "
+        SELECT branch_name,
+               parent_pdb,
+               status,
+               profile_name,
+               TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS TZH:TZM') created_at,
+               TO_CHAR(opened_at, 'YYYY-MM-DD HH24:MI:SS TZH:TZM') opened_at,
+               TO_CHAR(closed_at, 'YYYY-MM-DD HH24:MI:SS TZH:TZM') closed_at,
+               TO_CHAR(dropped_at, 'YYYY-MM-DD HH24:MI:SS TZH:TZM') dropped_at,
+               TO_CHAR(last_activity_at, 'YYYY-MM-DD HH24:MI:SS TZH:TZM') last_activity_at,
+               TO_CHAR(expires_at, 'YYYY-MM-DD HH24:MI:SS TZH:TZM') expires_at,
+               TO_CHAR(score) score,
+               DBMS_LOB.SUBSTR(notes, 4000, 1) notes
+          FROM pdb_branch_branches
+          {where_clause}
+         ORDER BY created_at DESC
+        "
+    )
+}
+
+fn required_column(value: Option<String>, column: &str) -> Result<String> {
+    value.ok_or_else(|| Error::Database(format!("{column} column was NULL")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +723,7 @@ mod tests {
         executions: Arc<Mutex<Vec<(String, Vec<BindValue>)>>>,
         queries: Arc<Mutex<Vec<(String, Vec<BindValue>)>>>,
         query_results: Arc<Mutex<Vec<Option<String>>>>,
+        row_query_results: Arc<Mutex<Vec<Vec<Vec<Option<String>>>>>>,
         commits: Arc<Mutex<u32>>,
     }
 
@@ -549,6 +734,26 @@ mod tests {
                     results
                         .into_iter()
                         .map(|value| value.map(str::to_owned))
+                        .collect(),
+                )),
+                ..Self::default()
+            }
+        }
+
+        fn with_row_query_results(results: Vec<Vec<Vec<Option<&str>>>>) -> Self {
+            Self {
+                row_query_results: Arc::new(Mutex::new(
+                    results
+                        .into_iter()
+                        .map(|rows| {
+                            rows.into_iter()
+                                .map(|row| {
+                                    row.into_iter()
+                                        .map(|value| value.map(str::to_owned))
+                                        .collect()
+                                })
+                                .collect()
+                        })
                         .collect(),
                 )),
                 ..Self::default()
@@ -576,6 +781,18 @@ mod tests {
                 .unwrap()
                 .push((sql.to_owned(), binds.to_vec()));
             Ok(self.query_results.lock().unwrap().remove(0))
+        }
+
+        async fn query_rows(
+            &self,
+            sql: &str,
+            binds: &[BindValue],
+        ) -> Result<Vec<Vec<Option<String>>>> {
+            self.queries
+                .lock()
+                .unwrap()
+                .push((sql.to_owned(), binds.to_vec()));
+            Ok(self.row_query_results.lock().unwrap().remove(0))
         }
 
         async fn commit(&self) -> Result<()> {
@@ -694,5 +911,47 @@ mod tests {
 
         assert_eq!(executor.executions.lock().unwrap().len(), 6);
         assert_eq!(*executor.commits.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_branches_maps_rows() {
+        let executor = FakeExecutor::with_row_query_results(vec![vec![vec![
+            Some("AGENT_RAG_042"),
+            Some("GOLDEN_MASTER"),
+            Some("OPEN"),
+            Some("PDB_BRANCH_ACTIVE"),
+            Some("2026-05-09 10:00:00 +00:00"),
+            Some("2026-05-09 10:01:00 +00:00"),
+            None,
+            None,
+            Some("2026-05-09 10:02:00 +00:00"),
+            None,
+            Some("0.91"),
+            Some("eval passed"),
+        ]]]);
+        let client = BranchClient::new(executor.clone());
+
+        let branches = client.list_branches(false).await.unwrap();
+
+        assert_eq!(
+            branches,
+            vec![BranchInfo {
+                branch_name: "AGENT_RAG_042".to_owned(),
+                parent_pdb: Some("GOLDEN_MASTER".to_owned()),
+                status: "OPEN".to_owned(),
+                profile_name: Some("PDB_BRANCH_ACTIVE".to_owned()),
+                created_at: Some("2026-05-09 10:00:00 +00:00".to_owned()),
+                opened_at: Some("2026-05-09 10:01:00 +00:00".to_owned()),
+                closed_at: None,
+                dropped_at: None,
+                last_activity_at: Some("2026-05-09 10:02:00 +00:00".to_owned()),
+                expires_at: None,
+                score: Some(0.91),
+                notes: Some("eval passed".to_owned()),
+            }]
+        );
+
+        let queries = executor.queries.lock().unwrap();
+        assert!(queries[0].0.contains("WHERE status <> 'DROPPED'"));
     }
 }

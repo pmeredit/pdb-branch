@@ -70,6 +70,51 @@ Run tests:
 cargo test
 ```
 
+Build the `pdb` CLI:
+
+```bash
+cargo build --features cli --bin pdb
+```
+
+Create a local TOML profile:
+
+```bash
+target/debug/pdb init --dsn localhost:1521/FREE --user sys --password PdbBranch1_ --from FREEPDB1
+```
+
+The CLI reads `.pdbprofile` from the current directory by default:
+
+```toml
+[database]
+dsn = "localhost:1521/FREE"
+user = "sys"
+password = "PdbBranch1_"
+sysdba = true
+install = true
+
+[branch]
+from = "FREEPDB1"
+snapshot_copy = true
+open = true
+```
+
+Daily branch usage mirrors the common `git branch` flow:
+
+```bash
+target/debug/pdb branch
+target/debug/pdb branch EXPERIMENT_042 --notes "try reranking"
+target/debug/pdb branch -d EXPERIMENT_042
+```
+
+Other lifecycle operations are explicit commands:
+
+```bash
+target/debug/pdb open EXPERIMENT_042
+target/debug/pdb close EXPERIMENT_042
+target/debug/pdb score EXPERIMENT_042 0.91 --notes "eval passed"
+target/debug/pdb promote EXPERIMENT_042
+```
+
 Run the Oracle Free integration test from the repository root:
 
 ```bash

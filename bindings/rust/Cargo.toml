@@ -7,14 +7,24 @@ license = "Apache-2.0"
 
 [features]
 default = ["oracle-rs"]
+cli = ["dep:clap", "dep:futures", "dep:serde", "dep:toml", "rust-oracle"]
 oracle-rs = ["dep:oracle_rs"]
 rust-oracle = ["dep:oracle"]
 
 [dependencies]
 async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"], optional = true }
+futures = { version = "0.3", optional = true }
 oracle = { version = "0.6.3", optional = true }
 oracle_rs = { package = "oracle-rs", version = "0.1.7", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"
+toml = { version = "0.8", optional = true }
+
+[[bin]]
+name = "pdb"
+path = "src/bin/pdb.rs"
+required-features = ["cli"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "time"] }

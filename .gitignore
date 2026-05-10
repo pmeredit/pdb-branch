@@ -2,6 +2,7 @@
 .venv-integration/
 .pytest_cache/
 .ruff_cache/
+.pdbprofile
 target/
 node_modules/
 dist/

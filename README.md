@@ -233,6 +233,21 @@ Rust-specific knobs:
 - `PDB_BRANCH_SYS_PASSWORD=...` sets that user's password. The default is
   `ORACLE_PWD`.
 
+The Rust crate also ships a `pdb` CLI behind the `cli` feature:
+
+```bash
+cd bindings/rust
+cargo build --features cli --bin pdb
+target/debug/pdb init --dsn localhost:1521/FREE --user sys --password PdbBranch1_ --from FREEPDB1
+target/debug/pdb branch
+target/debug/pdb branch EXPERIMENT_042 --notes "try reranking"
+target/debug/pdb branch -d EXPERIMENT_042
+```
+
+`pdb` reads a local TOML `.pdbprofile` by default. Command-line flags override
+environment variables, which override `.pdbprofile`, which override local
+development defaults.
+
 Run the Node.js and Java Oracle Free integration tests with their own entry
 scripts:
 
