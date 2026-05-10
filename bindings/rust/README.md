@@ -121,9 +121,20 @@ Run the Oracle Free integration test from the repository root:
 scripts/run-rust-oracle-free-integration.sh
 ```
 
-The entry script runs the live Oracle Free lifecycle test through the ODPI-C
-based `rust-oracle` backend because PDB lifecycle DDL requires SYSDBA
-authentication. The pure-Rust `oracle-rs` backend is still covered by the normal
-Rust unit tests, but it does not currently expose SYSDBA authentication. The
-live Rust script therefore needs the Oracle Client runtime expected by the
-`oracle` crate.
+The entry script runs the live Oracle Free lifecycle test through direct
+`BranchClient` API calls using the ODPI-C based `rust-oracle` backend because
+PDB lifecycle DDL requires SYSDBA authentication. The pure-Rust `oracle-rs`
+backend is still covered by the normal Rust unit tests, but it does not
+currently expose SYSDBA authentication. The live Rust script therefore needs the
+Oracle Client runtime expected by the `oracle` crate.
+
+Run the CLI Oracle Free integration test from the repository root:
+
+```bash
+scripts/run-cli-oracle-free-integration.sh
+```
+
+This entry script starts or reuses Oracle Free, builds `pdb`, writes a temporary
+`.pdbprofile`, and runs create/list/score/close/open/promote/drop through the
+CLI. Set `PDB_BRANCH_TEST_SNAPSHOT_COPY=1` to also assert that the CLI surfaces
+the Oracle Free snapshot-copy fallback warning.

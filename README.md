@@ -248,6 +248,15 @@ target/debug/pdb branch -d EXPERIMENT_042
 environment variables, which override `.pdbprofile`, which override local
 development defaults.
 
+Run the CLI Oracle Free integration test with its own entry script:
+
+```bash
+scripts/run-cli-oracle-free-integration.sh
+```
+
+This script uses the same Oracle Free harness, but drives lifecycle operations
+through the `pdb` binary instead of calling the Rust library directly.
+
 Run the Node.js and Java Oracle Free integration tests with their own entry
 scripts:
 
