@@ -49,6 +49,7 @@ project is designed around.
 
 - `sql/` - shared PL/SQL install scripts
 - `scripts/` - local development and integration test helpers
+- `bin/` - checkout-local command wrappers
 - `bindings/python/` - Python binding
 - `bindings/node/` - Node.js binding
 - `bindings/rust/` - Rust binding; defaults to `oracle-rs` and can use the
@@ -77,6 +78,63 @@ support storage snapshots. On non-Free databases, `snapshot_copy=True` attempts
 or `ORA-65169`. Every fallback records a `SNAPSHOT_COPY_FALLBACK` event in
 `PDB_BRANCH_EVENTS`; the Python binding also emits
 `SnapshotCopyFallbackWarning`.
+
+## CLI Usage
+
+The checkout includes a `pdb` command wrapper at `bin/pdb`. It runs the Rust CLI
+without requiring callers to know Cargo's `target/debug` or `target/release`
+paths. Build it once for faster startup:
+
+```bash
+cargo build --manifest-path bindings/rust/Cargo.toml --release --features cli --bin pdb
+```
+
+Initialize a local TOML profile:
+
+```bash
+bin/pdb init \
+  --dsn localhost:1521/FREE \
+  --user sys \
+  --password PdbBranch1_ \
+  --from FREEPDB1
+```
+
+`.pdbprofile` keeps the daily commands short:
+
+```toml
+[database]
+dsn = "localhost:1521/FREE"
+user = "sys"
+password = "PdbBranch1_"
+sysdba = true
+install = true
+
+[branch]
+from = "FREEPDB1"
+snapshot_copy = true
+open = true
+```
+
+Branch usage mirrors the common `git branch` flow:
+
+```bash
+bin/pdb branch
+bin/pdb branch EXPERIMENT_042 --notes "try reranking"
+bin/pdb branch -v
+bin/pdb branch -d EXPERIMENT_042
+```
+
+Other lifecycle operations are explicit commands:
+
+```bash
+bin/pdb open EXPERIMENT_042
+bin/pdb close EXPERIMENT_042
+bin/pdb score EXPERIMENT_042 0.91 --notes "eval passed"
+bin/pdb promote EXPERIMENT_042
+```
+
+Command-line flags override environment variables, which override
+`.pdbprofile`, which override local development defaults.
 
 ## Python Binding Usage
 
@@ -232,21 +290,6 @@ Rust-specific knobs:
   `sys`.
 - `PDB_BRANCH_SYS_PASSWORD=...` sets that user's password. The default is
   `ORACLE_PWD`.
-
-The Rust crate also ships a `pdb` CLI behind the `cli` feature:
-
-```bash
-cd bindings/rust
-cargo build --features cli --bin pdb
-target/debug/pdb init --dsn localhost:1521/FREE --user sys --password PdbBranch1_ --from FREEPDB1
-target/debug/pdb branch
-target/debug/pdb branch EXPERIMENT_042 --notes "try reranking"
-target/debug/pdb branch -d EXPERIMENT_042
-```
-
-`pdb` reads a local TOML `.pdbprofile` by default. Command-line flags override
-environment variables, which override `.pdbprofile`, which override local
-development defaults.
 
 Run the CLI Oracle Free integration test with its own entry script:
 

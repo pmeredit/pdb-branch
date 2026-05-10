@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RELEASE_BIN="$ROOT_DIR/bindings/rust/target/release/pdb"
+DEBUG_BIN="$ROOT_DIR/bindings/rust/target/debug/pdb"
+
+if [[ -x "$RELEASE_BIN" ]]; then
+    exec "$RELEASE_BIN" "$@"
+fi
+
+if [[ -x "$DEBUG_BIN" ]]; then
+    exec "$DEBUG_BIN" "$@"
+fi
+
+cd "$ROOT_DIR/bindings/rust"
+exec cargo run --release --features cli --bin pdb -- "$@"
