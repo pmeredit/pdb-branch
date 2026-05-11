@@ -342,6 +342,12 @@ client.cleanup(close_idle_after_minutes=60, drop_expired=True)
 In production, call `PDB_BRANCH.CLEANUP` from `DBMS_SCHEDULER` or a small
 control-plane service.
 
+## License
+
+`pdb-branch` is dual-licensed under the [MIT License](LICENSE-MIT) and the
+[Apache License, Version 2.0](LICENSE-APACHE). You may use this software under
+the terms of either license.
+
 ## Current Boundaries
 
 - The Python installer is idempotent, but it does not migrate destructive schema
