@@ -113,7 +113,8 @@ target/debug/pdb remote add qa \
   --dsn qa-host:1521/QA \
   --user sys \
   --password '...' \
-  --source-db-link PDB_BRANCH_ORIGIN
+  --source-db-link PDB_BRANCH_ORIGIN \
+  --push-clone-mode full
 
 target/debug/pdb push qa EXPERIMENT_042
 target/debug/pdb push qa EXPERIMENT_042:QA_EXPERIMENT_042
@@ -121,6 +122,11 @@ target/debug/pdb push qa EXPERIMENT_042:QA_EXPERIMENT_042
 
 `push` connects to the target remote and runs a remote PDB clone from
 `SOURCE_PDB@DB_LINK`; create that database link in the target CDB first.
+Use `--clone-mode full`, `--clone-mode auto`, or `--clone-mode snapshot` to
+control whether push creates a full clone, tries Snapshot Copy with full-clone
+fallback, or requires Snapshot Copy. Target remotes can set `push_clone_mode =
+"auto"` when cheap copy-on-write is preferred and full-copy fallback is
+acceptable.
 
 Daily branch usage mirrors the common `git branch` flow:
 

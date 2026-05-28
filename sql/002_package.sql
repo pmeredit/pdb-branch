@@ -9,10 +9,11 @@ CREATE OR REPLACE PACKAGE pdb_branch AUTHID DEFINER AS
         p_notes          IN CLOB DEFAULT NULL
     );
 
-    PROCEDURE copy_branch_from_remote(
+    PROCEDURE clone_branch_from_remote(
         p_branch_name       IN VARCHAR2,
         p_source_pdb        IN VARCHAR2,
         p_source_db_link    IN VARCHAR2,
+        p_clone_mode        IN VARCHAR2 DEFAULT 'FULL',
         p_open              IN VARCHAR2 DEFAULT 'Y',
         p_profile_name      IN VARCHAR2 DEFAULT NULL,
         p_expires_at        IN TIMESTAMP WITH TIME ZONE DEFAULT NULL,
@@ -187,12 +188,25 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         IF v_destination IS NULL THEN
             RAISE_APPLICATION_ERROR(
                 -20010,
-                'remote PDB copy requires DB_CREATE_FILE_DEST or an explicit create file destination'
+                'remote PDB clone requires DB_CREATE_FILE_DEST or an explicit create file destination'
             );
         END IF;
 
         RETURN v_destination;
     END remote_create_file_dest;
+
+    FUNCTION clean_clone_mode(p_clone_mode IN VARCHAR2) RETURN VARCHAR2 IS
+        v_clone_mode VARCHAR2(30) := UPPER(TRIM(NVL(p_clone_mode, 'FULL')));
+    BEGIN
+        IF v_clone_mode NOT IN ('FULL', 'AUTO', 'SNAPSHOT') THEN
+            RAISE_APPLICATION_ERROR(
+                -20011,
+                'clone mode must be FULL, AUTO, or SNAPSHOT'
+            );
+        END IF;
+
+        RETURN v_clone_mode;
+    END clean_clone_mode;
 
     FUNCTION database_banner RETURN VARCHAR2 IS
         v_banner VARCHAR2(4000);
@@ -239,20 +253,29 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
             qliteral(p_create_file_dest);
     END create_branch_sql;
 
-    FUNCTION copy_branch_from_remote_sql(
+    FUNCTION clone_branch_from_remote_sql(
         p_branch_name       IN VARCHAR2,
         p_source_pdb        IN VARCHAR2,
         p_source_db_link    IN VARCHAR2,
-        p_create_file_dest  IN VARCHAR2
+        p_create_file_dest  IN VARCHAR2,
+        p_snapshot_copy     IN BOOLEAN
     ) RETURN VARCHAR2 IS
+        v_sql VARCHAR2(32767);
     BEGIN
-        RETURN
+        v_sql :=
             'CREATE PLUGGABLE DATABASE ' || qname(p_branch_name, 'branch name') ||
             ' FROM ' || qname(p_source_pdb, 'source PDB') ||
-            '@' || db_link_name(p_source_db_link) ||
+            '@' || db_link_name(p_source_db_link);
+
+        IF p_snapshot_copy THEN
+            v_sql := v_sql || ' SNAPSHOT COPY';
+        END IF;
+
+        RETURN
+            v_sql ||
             ' CREATE_FILE_DEST = ' ||
             qliteral(p_create_file_dest);
-    END copy_branch_from_remote_sql;
+    END clone_branch_from_remote_sql;
 
     PROCEDURE log_event(
         p_branch_name IN VARCHAR2,
@@ -405,10 +428,11 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         END IF;
     END create_branch;
 
-    PROCEDURE copy_branch_from_remote(
+    PROCEDURE clone_branch_from_remote(
         p_branch_name       IN VARCHAR2,
         p_source_pdb        IN VARCHAR2,
         p_source_db_link    IN VARCHAR2,
+        p_clone_mode        IN VARCHAR2 DEFAULT 'FULL',
         p_open              IN VARCHAR2 DEFAULT 'Y',
         p_profile_name      IN VARCHAR2 DEFAULT NULL,
         p_expires_at        IN TIMESTAMP WITH TIME ZONE DEFAULT NULL,
@@ -419,17 +443,50 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         v_source_pdb        VARCHAR2(128) := clean_name(p_source_pdb, 'source PDB');
         v_source_db_link    VARCHAR2(128) := db_link_name(p_source_db_link);
         v_create_file_dest  VARCHAR2(4000);
+        v_clone_mode        VARCHAR2(30) := clean_clone_mode(p_clone_mode);
+        v_used_snapshot     BOOLEAN;
+        v_error_code        NUMBER;
+        v_error_message     VARCHAR2(4000);
+        v_fallback_warning  VARCHAR2(4000);
         v_sql               VARCHAR2(32767);
     BEGIN
         v_create_file_dest := remote_create_file_dest(p_create_file_dest);
-        v_sql := copy_branch_from_remote_sql(
+        v_used_snapshot := v_clone_mode IN ('AUTO', 'SNAPSHOT');
+        v_sql := clone_branch_from_remote_sql(
             v_branch_name,
             v_source_pdb,
             v_source_db_link,
-            v_create_file_dest
+            v_create_file_dest,
+            v_used_snapshot
         );
 
-        EXECUTE IMMEDIATE v_sql;
+        BEGIN
+            EXECUTE IMMEDIATE v_sql;
+        EXCEPTION
+            WHEN OTHERS THEN
+                v_error_code := SQLCODE;
+                v_error_message := SQLERRM;
+                IF v_clone_mode = 'AUTO' AND
+                   v_used_snapshot AND
+                   snapshot_copy_unsupported(v_error_code, v_error_message) THEN
+                    v_used_snapshot := FALSE;
+                    v_fallback_warning :=
+                        'WARNING: remote SNAPSHOT COPY requested with clone mode AUTO but Oracle ' ||
+                        'reported storage snapshots are unsupported (' ||
+                        TO_CHAR(v_error_code) || ': ' ||
+                        SUBSTR(v_error_message, 1, 3400) || '); pushed with full clone';
+                    v_sql := clone_branch_from_remote_sql(
+                        v_branch_name,
+                        v_source_pdb,
+                        v_source_db_link,
+                        v_create_file_dest,
+                        v_used_snapshot
+                    );
+                    EXECUTE IMMEDIATE v_sql;
+                ELSE
+                    RAISE;
+                END IF;
+        END;
 
         upsert_branch(
             p_branch_name  => v_branch_name,
@@ -439,13 +496,16 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
             p_expires_at   => p_expires_at,
             p_notes        => p_notes
         );
-        log_event(v_branch_name, 'COPY_BRANCH_FROM_REMOTE', v_sql);
+        log_event(v_branch_name, 'CLONE_BRANCH_FROM_REMOTE', v_sql);
+        IF v_clone_mode = 'AUTO' AND NOT v_used_snapshot THEN
+            log_event(v_branch_name, 'REMOTE_SNAPSHOT_COPY_FALLBACK', v_fallback_warning);
+        END IF;
         COMMIT;
 
         IF yes(p_open) THEN
             open_branch(v_branch_name, p_profile_name);
         END IF;
-    END copy_branch_from_remote;
+    END clone_branch_from_remote;
 
     PROCEDURE open_branch(
         p_branch_name   IN VARCHAR2,

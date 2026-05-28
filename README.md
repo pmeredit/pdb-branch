@@ -138,7 +138,8 @@ bin/pdb remote add qa \
   --dsn qa-host:1521/QA \
   --user sys \
   --password '...' \
-  --source-db-link PDB_BRANCH_ORIGIN
+  --source-db-link PDB_BRANCH_ORIGIN \
+  --push-clone-mode full
 
 bin/pdb push qa EXPERIMENT_042
 bin/pdb push qa EXPERIMENT_042:QA_EXPERIMENT_042
@@ -147,6 +148,40 @@ bin/pdb push qa EXPERIMENT_042:QA_EXPERIMENT_042
 `pdb push` connects to the target remote and creates the target PDB from
 `SOURCE_PDB@DB_LINK`. The `source_db_link` must already exist in the target CDB
 and point back to the source CDB that contains the branch.
+
+Push clone mode controls how the target CDB creates the PDB:
+
+```bash
+bin/pdb push qa EXPERIMENT_042 --clone-mode full
+bin/pdb push qa EXPERIMENT_042 --clone-mode auto
+bin/pdb push qa EXPERIMENT_042 --clone-mode snapshot
+```
+
+- `full` is the default. It creates an independent full clone in the target CDB.
+- `auto` tries `SNAPSHOT COPY` first, then falls back to a full clone when
+  Oracle reports that storage snapshots are unsupported. The CLI prints the
+  fallback warning.
+- `snapshot` requires `SNAPSHOT COPY`; if Oracle cannot create a snapshot copy,
+  the push fails.
+
+Set a target remote default when a CDB is known to support cheap snapshots:
+
+```toml
+[remotes.qa]
+dsn = "qa-host:1521/QA"
+user = "sys"
+password = "..."
+sysdba = true
+install = true
+source_db_link = "PDB_BRANCH_ORIGIN"
+push_clone_mode = "auto"
+```
+
+Snapshot pushes are cheaper but less independent than full pushes. They depend
+on Oracle Snapshot Copy PDB support in the database and storage layer, and they
+keep lifecycle coupling between the source PDB and snapshot-copy clones. Use
+`snapshot` for environments where failure is preferable to a full copy, and use
+`auto` when cheap copy-on-write is preferred but a full copy is acceptable.
 
 Other lifecycle operations are explicit commands:
 
@@ -177,6 +212,8 @@ Known differences in the mirrored subset:
   from branch upstream configuration, with `origin` only as a convention.
 - `pdb remote add qa --dsn ... --user ... --password ...` stores a CDB root
   connection, not a single Git URL.
+- `pdb remote add qa --push-clone-mode auto` stores the target CDB's default
+  PDB clone strategy. Git remotes do not have storage clone modes.
 - `pdb remote default NAME` is a convenience command with no direct Git
   equivalent.
 - `pdb branch NAME --from PDB` is closest to `git branch NAME START_POINT`, but
@@ -188,6 +225,9 @@ Known differences in the mirrored subset:
 - `pdb push qa EXPERIMENT_042` copies a PDB to the target CDB by asking the
   target to clone `SOURCE_PDB@DB_LINK`. Git push transfers refs and objects from
   the local repository.
+- `pdb push --clone-mode snapshot` is intentionally not Git-like. It asks Oracle
+  to create a storage-level snapshot-copy PDB, which can be much cheaper than a
+  full copy but is tied to Oracle storage support and PDB lifecycle rules.
 - `pdb push --source origin` names the source CDB remote that the target-side
   database link is expected to reach. Git has no source-remote flag because the
   source is the local repository.

@@ -1,8 +1,8 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::executor::block_on;
 use oracle::{Connection, Connector, Privilege};
 use pdb_branch::{
-    BranchClient, BranchInfo, BranchOptions, CleanupOptions, RemoteCopyOptions,
+    BranchClient, BranchInfo, BranchOptions, CleanupOptions, RemoteCloneOptions,
     ResourcePlanOptions, RustOracleExecutor,
 };
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,9 @@ struct PushArgs {
     #[arg(long = "create-file-dest", value_name = "PATH")]
     create_file_dest: Option<String>,
 
+    #[arg(long = "clone-mode", value_enum, value_name = "MODE")]
+    clone_mode: Option<PushCloneMode>,
+
     #[arg(long)]
     open: bool,
 
@@ -223,8 +226,43 @@ struct RemoteAddArgs {
     #[arg(long = "create-file-dest", value_name = "PATH")]
     create_file_dest: Option<String>,
 
+    #[arg(long = "push-clone-mode", value_enum, value_name = "MODE")]
+    push_clone_mode: Option<PushCloneMode>,
+
     #[arg(long = "default")]
     make_default: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+enum PushCloneMode {
+    Full,
+    Auto,
+    Snapshot,
+}
+
+impl PushCloneMode {
+    fn as_plsql(self) -> &'static str {
+        match self {
+            Self::Full => "FULL",
+            Self::Auto => "AUTO",
+            Self::Snapshot => "SNAPSHOT",
+        }
+    }
+
+    fn as_display(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Auto => "auto",
+            Self::Snapshot => "snapshot",
+        }
+    }
+}
+
+impl Default for PushCloneMode {
+    fn default() -> Self {
+        Self::Full
+    }
 }
 
 #[derive(Debug, Args)]
@@ -302,6 +340,7 @@ struct DatabaseResolved {
     install: bool,
     source_db_link: Option<String>,
     create_file_dest: Option<String>,
+    push_clone_mode: PushCloneMode,
 }
 
 #[derive(Clone, Debug)]
@@ -339,6 +378,8 @@ struct RemoteProfile {
     source_db_link: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     create_file_dest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    push_clone_mode: Option<PushCloneMode>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -557,13 +598,17 @@ fn run_push(cli: &Cli, profile: &ProfileFile, args: &PushArgs) -> CliResult {
         .create_file_dest
         .as_deref()
         .or(target_config.database.create_file_dest.as_deref());
+    let clone_mode = args
+        .clone_mode
+        .unwrap_or(target_config.database.push_clone_mode);
 
     let client = ready_client(&target_config)?;
-    block_on(client.copy_branch_from_remote(
+    let result = block_on(client.clone_branch_from_remote_with_result(
         target_branch,
-        RemoteCopyOptions {
+        RemoteCloneOptions {
             source_pdb,
             source_db_link,
+            clone_mode: clone_mode.as_plsql(),
             open_branch: open,
             profile_name,
             expires_at: args.expires_at.as_deref(),
@@ -571,10 +616,15 @@ fn run_push(cli: &Cli, profile: &ProfileFile, args: &PushArgs) -> CliResult {
             create_file_dest,
         },
     ))?;
+    if let Some(warning) = result.fallback_warning {
+        eprintln!("{warning}");
+    }
 
     println!(
-        "Pushed {source_remote}/{source_pdb} to {}/{}",
-        target_config.remote_name, target_branch
+        "Pushed {source_remote}/{source_pdb} to {}/{} with {} clone mode",
+        target_config.remote_name,
+        target_branch,
+        clone_mode.as_display()
     );
     Ok(())
 }
@@ -623,6 +673,7 @@ fn add_remote(path: &Path, profile: &mut ProfileFile, args: &RemoteAddArgs) -> C
             install: Some(install),
             source_db_link: args.source_db_link.clone(),
             create_file_dest: args.create_file_dest.clone(),
+            push_clone_mode: args.push_clone_mode,
         },
     );
 
@@ -697,6 +748,10 @@ fn show_remote(profile: &ProfileFile, name: &str) -> CliResult {
     println!(
         "create_file_dest = {}",
         remote.create_file_dest.as_deref().unwrap_or("-")
+    );
+    println!(
+        "push_clone_mode = {}",
+        remote.push_clone_mode.unwrap_or_default().as_display()
     );
     Ok(())
 }
@@ -802,6 +857,7 @@ fn init_profile(path: &Path, config: &ResolvedConfig, args: &InitArgs) -> CliRes
             install: Some(config.database.install),
             source_db_link: config.database.source_db_link.clone(),
             create_file_dest: config.database.create_file_dest.clone(),
+            push_clone_mode: Some(config.database.push_clone_mode),
         },
     );
     let profile = ProfileFile {
@@ -886,6 +942,11 @@ fn resolve_config(
         .unwrap_or(true);
     let source_db_link = env_first(&["PDB_BRANCH_SOURCE_DB_LINK"]).or(remote.source_db_link);
     let create_file_dest = env_first(&["PDB_BRANCH_CREATE_FILE_DEST"]).or(remote.create_file_dest);
+    let push_clone_mode = env_first(&["PDB_BRANCH_PUSH_CLONE_MODE"])
+        .map(|value| parse_push_clone_mode(&value))
+        .transpose()?
+        .or(remote.push_clone_mode)
+        .unwrap_or_default();
 
     Ok(ResolvedConfig {
         remote_name,
@@ -897,6 +958,7 @@ fn resolve_config(
             install: choose_bool(cli.install, cli.no_install, install_default, "install")?,
             source_db_link,
             create_file_dest,
+            push_clone_mode,
         },
         branch: BranchResolved {
             from_pdb: env_first(&["PDB_BRANCH_PARENT_PDB"])
@@ -967,6 +1029,7 @@ fn apply_config_override(profile: &mut ProfileFile, value: &str) -> CliResult {
             "install" => remote.install = Some(parse_bool(raw_value)?),
             "source_db_link" => remote.source_db_link = Some(raw_value.to_owned()),
             "create_file_dest" => remote.create_file_dest = Some(raw_value.to_owned()),
+            "push_clone_mode" => remote.push_clone_mode = Some(parse_push_clone_mode(raw_value)?),
             _ => return Err(format!("unknown remote config key {field:?}").into()),
         }
         return Ok(());
@@ -1010,6 +1073,17 @@ fn parse_bool(value: &str) -> CliResult<bool> {
     }
 }
 
+fn parse_push_clone_mode(value: &str) -> CliResult<PushCloneMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "full" => Ok(PushCloneMode::Full),
+        "auto" => Ok(PushCloneMode::Auto),
+        "snapshot" => Ok(PushCloneMode::Snapshot),
+        _ => Err(
+            format!("invalid push clone mode {value:?}; expected full, auto, or snapshot").into(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1033,6 +1107,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_push_clone_modes() {
+        assert_eq!(parse_push_clone_mode("full").unwrap(), PushCloneMode::Full);
+        assert_eq!(parse_push_clone_mode("AUTO").unwrap(), PushCloneMode::Auto);
+        assert_eq!(
+            parse_push_clone_mode("snapshot").unwrap(),
+            PushCloneMode::Snapshot
+        );
+        assert!(parse_push_clone_mode("linked").is_err());
+    }
+
+    #[test]
     fn config_override_updates_named_remote() {
         let mut profile = ProfileFile::default();
 
@@ -1041,6 +1126,7 @@ mod tests {
         apply_config_override(&mut profile, "remotes.qa.user=sys").unwrap();
         apply_config_override(&mut profile, "remotes.qa.sysdba=true").unwrap();
         apply_config_override(&mut profile, "remotes.qa.source_db_link=PDB_BRANCH_ORIGIN").unwrap();
+        apply_config_override(&mut profile, "remotes.qa.push_clone_mode=auto").unwrap();
 
         let remote = profile.remotes.get("qa").unwrap();
         assert_eq!(profile.default_remote.as_deref(), Some("qa"));
@@ -1048,5 +1134,6 @@ mod tests {
         assert_eq!(remote.user.as_deref(), Some("sys"));
         assert_eq!(remote.sysdba, Some(true));
         assert_eq!(remote.source_db_link.as_deref(), Some("PDB_BRANCH_ORIGIN"));
+        assert_eq!(remote.push_clone_mode, Some(PushCloneMode::Auto));
     }
 }

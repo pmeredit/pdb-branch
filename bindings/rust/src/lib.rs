@@ -362,17 +362,18 @@ where
         })
     }
 
-    pub async fn copy_branch_from_remote(
+    pub async fn clone_branch_from_remote(
         &self,
         branch_name: &str,
-        options: RemoteCopyOptions<'_>,
+        options: RemoteCloneOptions<'_>,
     ) -> Result<()> {
         self.call(
-            "pdb_branch.copy_branch_from_remote",
+            "pdb_branch.clone_branch_from_remote",
             &[
                 branch_name.into(),
                 options.source_pdb.into(),
                 options.source_db_link.into(),
+                options.clone_mode.into(),
                 yn(options.open_branch).into(),
                 optional(options.profile_name),
                 optional(options.expires_at),
@@ -381,6 +382,38 @@ where
             ],
         )
         .await
+    }
+
+    pub async fn clone_branch_from_remote_with_result(
+        &self,
+        branch_name: &str,
+        options: RemoteCloneOptions<'_>,
+    ) -> Result<RemoteCloneResult> {
+        let clone_mode = options.clone_mode.to_owned();
+        let tracks_fallback = options.clone_mode.eq_ignore_ascii_case("AUTO");
+        let snapshot_copy_requested =
+            tracks_fallback || options.clone_mode.eq_ignore_ascii_case("SNAPSHOT");
+        let last_event_id = if tracks_fallback {
+            self.max_event_id(branch_name).await?
+        } else {
+            None
+        };
+
+        self.clone_branch_from_remote(branch_name, options).await?;
+
+        let fallback_warning = if tracks_fallback {
+            self.remote_snapshot_fallback_warning(branch_name, last_event_id)
+                .await?
+        } else {
+            None
+        };
+
+        Ok(RemoteCloneResult {
+            clone_mode,
+            snapshot_copy_requested,
+            snapshot_copy_fell_back: fallback_warning.is_some(),
+            fallback_warning,
+        })
     }
 
     pub async fn open_branch(&self, branch_name: &str, profile_name: Option<&str>) -> Result<()> {
@@ -547,10 +580,45 @@ where
             )
             .await
     }
+
+    async fn remote_snapshot_fallback_warning(
+        &self,
+        branch_name: &str,
+        last_event_id: Option<i64>,
+    ) -> Result<Option<String>> {
+        self.executor
+            .query_optional_string(
+                "
+                SELECT warning
+                  FROM (
+                        SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
+                          FROM pdb_branch_events
+                         WHERE branch_name = UPPER(:1)
+                           AND event_type = 'REMOTE_SNAPSHOT_COPY_FALLBACK'
+                           AND (:2 IS NULL OR event_id > :2)
+                         ORDER BY event_id DESC
+                       )
+                 WHERE ROWNUM = 1
+                ",
+                &[
+                    branch_name.into(),
+                    last_event_id.map_or(BindValue::Null, BindValue::from),
+                ],
+            )
+            .await
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateBranchResult {
+    pub snapshot_copy_requested: bool,
+    pub snapshot_copy_fell_back: bool,
+    pub fallback_warning: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteCloneResult {
+    pub clone_mode: String,
     pub snapshot_copy_requested: bool,
     pub snapshot_copy_fell_back: bool,
     pub fallback_warning: Option<String>,
@@ -643,9 +711,10 @@ impl Default for BranchOptions<'_> {
 }
 
 #[derive(Clone, Debug)]
-pub struct RemoteCopyOptions<'a> {
+pub struct RemoteCloneOptions<'a> {
     pub source_pdb: &'a str,
     pub source_db_link: &'a str,
+    pub clone_mode: &'a str,
     pub open_branch: bool,
     pub profile_name: Option<&'a str>,
     pub expires_at: Option<&'a str>,
@@ -653,11 +722,12 @@ pub struct RemoteCopyOptions<'a> {
     pub create_file_dest: Option<&'a str>,
 }
 
-impl Default for RemoteCopyOptions<'_> {
+impl Default for RemoteCloneOptions<'_> {
     fn default() -> Self {
         Self {
             source_pdb: "GOLDEN_MASTER",
             source_db_link: "PDB_BRANCH_SOURCE",
+            clone_mode: "FULL",
             open_branch: true,
             profile_name: None,
             expires_at: None,
@@ -908,19 +978,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_branch_from_remote_calls_plsql_package() {
+    async fn clone_branch_from_remote_calls_plsql_package() {
         let executor = FakeExecutor::default();
         let client = BranchClient::new(executor.clone());
 
         client
-            .copy_branch_from_remote(
+            .clone_branch_from_remote(
                 "AGENT_RAG_042",
-                RemoteCopyOptions {
+                RemoteCloneOptions {
                     source_pdb: "SOURCE_BRANCH",
                     source_db_link: "PDB_BRANCH_SOURCE",
+                    clone_mode: "AUTO",
                     notes: Some("push from origin"),
                     create_file_dest: Some("/opt/oracle/oradata/FREE"),
-                    ..RemoteCopyOptions::default()
+                    ..RemoteCloneOptions::default()
                 },
             )
             .await
@@ -930,7 +1001,7 @@ mod tests {
         assert_eq!(executions.len(), 1);
         assert_eq!(
             executions[0].0,
-            "BEGIN pdb_branch.copy_branch_from_remote(:1, :2, :3, :4, :5, :6, :7, :8); END;"
+            "BEGIN pdb_branch.clone_branch_from_remote(:1, :2, :3, :4, :5, :6, :7, :8, :9); END;"
         );
         assert_eq!(
             executions[0].1,
@@ -938,12 +1009,57 @@ mod tests {
                 "AGENT_RAG_042".into(),
                 "SOURCE_BRANCH".into(),
                 "PDB_BRANCH_SOURCE".into(),
+                "AUTO".into(),
                 "Y".into(),
                 BindValue::Null,
                 BindValue::Null,
                 "push from origin".into(),
                 "/opt/oracle/oradata/FREE".into(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn clone_branch_from_remote_with_result_reports_auto_fallback() {
+        let executor = FakeExecutor::with_query_results(vec![
+            Some("12"),
+            Some("WARNING: remote SNAPSHOT COPY requested with clone mode AUTO; pushed with full clone"),
+        ]);
+        let client = BranchClient::new(executor.clone());
+
+        let result = client
+            .clone_branch_from_remote_with_result(
+                "AGENT_RAG_042",
+                RemoteCloneOptions {
+                    source_pdb: "SOURCE_BRANCH",
+                    source_db_link: "PDB_BRANCH_SOURCE",
+                    clone_mode: "AUTO",
+                    ..RemoteCloneOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            RemoteCloneResult {
+                clone_mode: "AUTO".to_owned(),
+                snapshot_copy_requested: true,
+                snapshot_copy_fell_back: true,
+                fallback_warning: Some(
+                    "WARNING: remote SNAPSHOT COPY requested with clone mode AUTO; pushed with full clone"
+                        .to_owned()
+                ),
+            }
+        );
+
+        let queries = executor.queries.lock().unwrap();
+        assert_eq!(queries.len(), 2);
+        assert!(queries[0].0.contains("MAX(event_id)"));
+        assert!(queries[1].0.contains("REMOTE_SNAPSHOT_COPY_FALLBACK"));
+        assert_eq!(
+            queries[1].1,
+            vec!["AGENT_RAG_042".into(), BindValue::Number(12.0)]
         );
     }
 
