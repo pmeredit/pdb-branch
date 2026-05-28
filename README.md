@@ -1,11 +1,20 @@
 # pdb-branch
 
-`pdb-branch` is a small multi-language library over a shared PL/SQL package for
-making Oracle PDB snapshot copies feel like cheap database branches for agentic
-workflow experiments.
+`pdb-branch` is a small multi-language control plane over a shared PL/SQL
+package for treating Oracle PDBs more like Git working state. It supports cheap
+local PDB branches with Snapshot Copy where Oracle storage allows it, and it now
+also models CDBs as remotes so branches can be pushed across CDB boundaries.
+
+The Git analogy is intentionally scoped to the pieces that map to PDB lifecycle
+operations: branches are PDB clones, remotes are CDB root connections, and push
+asks the target CDB to clone `SOURCE_PDB@DB_LINK`. The project does not transfer
+Git objects or client-side database files; Oracle still performs the PDB clone,
+with either a full clone or a Snapshot Copy clone depending on the selected
+clone mode.
 
 Language bindings install or upgrade the PL/SQL package at startup. After that,
-branch lifecycle operations go through a stable database-side API.
+branch lifecycle, remote clone, and push-like operations go through a stable
+database-side API.
 
 ## Oracle Version Support Disclaimer
 
