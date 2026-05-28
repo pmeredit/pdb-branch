@@ -93,6 +93,7 @@ Initialize a local TOML profile:
 
 ```bash
 bin/pdb init \
+  --remote origin \
   --dsn localhost:1521/FREE \
   --user sys \
   --password PdbBranch1_ \
@@ -102,7 +103,9 @@ bin/pdb init \
 `.pdbprofile` keeps the daily commands short:
 
 ```toml
-[database]
+default_remote = "origin"
+
+[remotes.origin]
 dsn = "localhost:1521/FREE"
 user = "sys"
 password = "PdbBranch1_"
@@ -115,6 +118,10 @@ snapshot_copy = true
 open = true
 ```
 
+Each remote is a CDB root connection. Lifecycle commands run against the
+selected remote, defaulting to `default_remote`; use `--remote NAME` for a
+one-off selection.
+
 Branch usage mirrors the common `git branch` flow:
 
 ```bash
@@ -123,6 +130,23 @@ bin/pdb branch EXPERIMENT_042 --notes "try reranking"
 bin/pdb branch -v
 bin/pdb branch -d EXPERIMENT_042
 ```
+
+Add another CDB remote when you want to copy branches across CDBs:
+
+```bash
+bin/pdb remote add qa \
+  --dsn qa-host:1521/QA \
+  --user sys \
+  --password '...' \
+  --source-db-link PDB_BRANCH_ORIGIN
+
+bin/pdb push qa EXPERIMENT_042
+bin/pdb push qa EXPERIMENT_042:QA_EXPERIMENT_042
+```
+
+`pdb push` connects to the target remote and creates the target PDB from
+`SOURCE_PDB@DB_LINK`. The `source_db_link` must already exist in the target CDB
+and point back to the source CDB that contains the branch.
 
 Other lifecycle operations are explicit commands:
 
@@ -134,7 +158,42 @@ bin/pdb promote EXPERIMENT_042
 ```
 
 Command-line flags override environment variables, which override
-`.pdbprofile`, which override local development defaults.
+`.pdbprofile`. Commands that connect to Oracle require a selected remote with a
+DSN, either from the profile, environment, or command-line flags.
+
+### Git compatibility notes
+
+The CLI intentionally borrows Git vocabulary for the small subset of operations
+that map well to PDB branching: `init`, `remote`, `branch`, and `push`. It is not
+a byte-for-byte Git interface, because CDB connections, PDB lifecycle DDL, and
+remote PDB cloning have database-specific requirements.
+
+Known differences in the mirrored subset:
+
+- `pdb init --remote origin --dsn ...` creates the first CDB remote while
+  writing `.pdbprofile`; Git normally separates `git init` from
+  `git remote add origin <url>`.
+- `.pdbprofile` has `default_remote = "origin"`. Git usually derives defaults
+  from branch upstream configuration, with `origin` only as a convention.
+- `pdb remote add qa --dsn ... --user ... --password ...` stores a CDB root
+  connection, not a single Git URL.
+- `pdb remote default NAME` is a convenience command with no direct Git
+  equivalent.
+- `pdb branch NAME --from PDB` is closest to `git branch NAME START_POINT`, but
+  the source PDB is passed with `--from` because branch creation clones a PDB.
+- `pdb branch --all` currently means include dropped branch records. Git
+  `branch --all` means local plus remote-tracking branches.
+- `pdb branch -D` currently follows the same drop path as `-d`; unlike Git, it
+  is not a stronger force-delete mode yet.
+- `pdb push qa EXPERIMENT_042` copies a PDB to the target CDB by asking the
+  target to clone `SOURCE_PDB@DB_LINK`. Git push transfers refs and objects from
+  the local repository.
+- `pdb push --source origin` names the source CDB remote that the target-side
+  database link is expected to reach. Git has no source-remote flag because the
+  source is the local repository.
+- `SOURCE[:TARGET]` is only the simple Git refspec shape. The CLI does not
+  implement force refspecs, delete refspecs, wildcards, tags, or multiple
+  refspecs.
 
 ## Python Binding Usage
 

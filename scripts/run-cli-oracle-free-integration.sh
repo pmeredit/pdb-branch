@@ -62,6 +62,7 @@ PDB_ARGS=(-C "$WORK_DIR" --no-install)
     --password "$SYS_PASSWORD" \
     init \
     --force \
+    --remote origin \
     --from FREEPDB1 \
     --no-snapshot
 

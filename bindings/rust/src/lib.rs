@@ -362,6 +362,27 @@ where
         })
     }
 
+    pub async fn copy_branch_from_remote(
+        &self,
+        branch_name: &str,
+        options: RemoteCopyOptions<'_>,
+    ) -> Result<()> {
+        self.call(
+            "pdb_branch.copy_branch_from_remote",
+            &[
+                branch_name.into(),
+                options.source_pdb.into(),
+                options.source_db_link.into(),
+                yn(options.open_branch).into(),
+                optional(options.profile_name),
+                optional(options.expires_at),
+                optional(options.notes),
+                optional(options.create_file_dest),
+            ],
+        )
+        .await
+    }
+
     pub async fn open_branch(&self, branch_name: &str, profile_name: Option<&str>) -> Result<()> {
         self.call(
             "pdb_branch.open_branch",
@@ -622,6 +643,31 @@ impl Default for BranchOptions<'_> {
 }
 
 #[derive(Clone, Debug)]
+pub struct RemoteCopyOptions<'a> {
+    pub source_pdb: &'a str,
+    pub source_db_link: &'a str,
+    pub open_branch: bool,
+    pub profile_name: Option<&'a str>,
+    pub expires_at: Option<&'a str>,
+    pub notes: Option<&'a str>,
+    pub create_file_dest: Option<&'a str>,
+}
+
+impl Default for RemoteCopyOptions<'_> {
+    fn default() -> Self {
+        Self {
+            source_pdb: "GOLDEN_MASTER",
+            source_db_link: "PDB_BRANCH_SOURCE",
+            open_branch: true,
+            profile_name: None,
+            expires_at: None,
+            notes: None,
+            create_file_dest: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct CleanupOptions {
     pub close_idle_after_minutes: i64,
     pub drop_expired: bool,
@@ -857,6 +903,46 @@ mod tests {
                 BindValue::Null,
                 BindValue::Null,
                 "try chunking".into(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_branch_from_remote_calls_plsql_package() {
+        let executor = FakeExecutor::default();
+        let client = BranchClient::new(executor.clone());
+
+        client
+            .copy_branch_from_remote(
+                "AGENT_RAG_042",
+                RemoteCopyOptions {
+                    source_pdb: "SOURCE_BRANCH",
+                    source_db_link: "PDB_BRANCH_SOURCE",
+                    notes: Some("push from origin"),
+                    create_file_dest: Some("/opt/oracle/oradata/FREE"),
+                    ..RemoteCopyOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let executions = executor.executions.lock().unwrap();
+        assert_eq!(executions.len(), 1);
+        assert_eq!(
+            executions[0].0,
+            "BEGIN pdb_branch.copy_branch_from_remote(:1, :2, :3, :4, :5, :6, :7, :8); END;"
+        );
+        assert_eq!(
+            executions[0].1,
+            vec![
+                "AGENT_RAG_042".into(),
+                "SOURCE_BRANCH".into(),
+                "PDB_BRANCH_SOURCE".into(),
+                "Y".into(),
+                BindValue::Null,
+                BindValue::Null,
+                "push from origin".into(),
+                "/opt/oracle/oradata/FREE".into(),
             ]
         );
     }

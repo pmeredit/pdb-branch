@@ -79,13 +79,20 @@ cargo build --features cli --bin pdb
 Create a local TOML profile:
 
 ```bash
-target/debug/pdb init --dsn localhost:1521/FREE --user sys --password PdbBranch1_ --from FREEPDB1
+target/debug/pdb init \
+  --remote origin \
+  --dsn localhost:1521/FREE \
+  --user sys \
+  --password PdbBranch1_ \
+  --from FREEPDB1
 ```
 
 The CLI reads `.pdbprofile` from the current directory by default:
 
 ```toml
-[database]
+default_remote = "origin"
+
+[remotes.origin]
 dsn = "localhost:1521/FREE"
 user = "sys"
 password = "PdbBranch1_"
@@ -97,6 +104,23 @@ from = "FREEPDB1"
 snapshot_copy = true
 open = true
 ```
+
+Use `target/debug/pdb remote` to list CDB remotes. Add a target CDB with the
+database link it should use to clone from the source CDB:
+
+```bash
+target/debug/pdb remote add qa \
+  --dsn qa-host:1521/QA \
+  --user sys \
+  --password '...' \
+  --source-db-link PDB_BRANCH_ORIGIN
+
+target/debug/pdb push qa EXPERIMENT_042
+target/debug/pdb push qa EXPERIMENT_042:QA_EXPERIMENT_042
+```
+
+`push` connects to the target remote and runs a remote PDB clone from
+`SOURCE_PDB@DB_LINK`; create that database link in the target CDB first.
 
 Daily branch usage mirrors the common `git branch` flow:
 

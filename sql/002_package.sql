@@ -9,6 +9,17 @@ CREATE OR REPLACE PACKAGE pdb_branch AUTHID DEFINER AS
         p_notes          IN CLOB DEFAULT NULL
     );
 
+    PROCEDURE copy_branch_from_remote(
+        p_branch_name       IN VARCHAR2,
+        p_source_pdb        IN VARCHAR2,
+        p_source_db_link    IN VARCHAR2,
+        p_open              IN VARCHAR2 DEFAULT 'Y',
+        p_profile_name      IN VARCHAR2 DEFAULT NULL,
+        p_expires_at        IN TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+        p_notes             IN CLOB DEFAULT NULL,
+        p_create_file_dest  IN VARCHAR2 DEFAULT NULL
+    );
+
     PROCEDURE open_branch(
         p_branch_name   IN VARCHAR2,
         p_profile_name  IN VARCHAR2 DEFAULT NULL
@@ -97,6 +108,23 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         RETURN DBMS_ASSERT.ENQUOTE_LITERAL(p_value);
     END qliteral;
 
+    FUNCTION db_link_name(p_name IN VARCHAR2) RETURN VARCHAR2 IS
+        v_name VARCHAR2(128) := UPPER(TRIM(p_name));
+    BEGIN
+        IF v_name IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20008, 'database link name is required');
+        END IF;
+
+        IF NOT REGEXP_LIKE(v_name, '^[A-Z][A-Z0-9_$#]{0,127}(\.[A-Z][A-Z0-9_$#]{1,128})*$') THEN
+            RAISE_APPLICATION_ERROR(
+                -20009,
+                'database link name must be an unquoted Oracle identifier or dotted identifier'
+            );
+        END IF;
+
+        RETURN DBMS_ASSERT.QUALIFIED_SQL_NAME(v_name);
+    END db_link_name;
+
     FUNCTION datafile_directory(p_pdb_name IN VARCHAR2) RETURN VARCHAR2 IS
         v_file_name VARCHAR2(4000);
         v_pos       PLS_INTEGER;
@@ -145,6 +173,27 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
         RETURN parent_directory(datafile_directory(p_from_pdb));
     END create_file_dest;
 
+    FUNCTION remote_create_file_dest(p_create_file_dest IN VARCHAR2) RETURN VARCHAR2 IS
+        v_destination VARCHAR2(4000) := TRIM(p_create_file_dest);
+    BEGIN
+        IF v_destination IS NOT NULL THEN
+            RETURN v_destination;
+        END IF;
+
+        EXECUTE IMMEDIATE
+            'SELECT value FROM v$parameter WHERE name = ''db_create_file_dest'''
+            INTO v_destination;
+
+        IF v_destination IS NULL THEN
+            RAISE_APPLICATION_ERROR(
+                -20010,
+                'remote PDB copy requires DB_CREATE_FILE_DEST or an explicit create file destination'
+            );
+        END IF;
+
+        RETURN v_destination;
+    END remote_create_file_dest;
+
     FUNCTION database_banner RETURN VARCHAR2 IS
         v_banner VARCHAR2(4000);
     BEGIN
@@ -189,6 +238,21 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
             ' CREATE_FILE_DEST = ' ||
             qliteral(p_create_file_dest);
     END create_branch_sql;
+
+    FUNCTION copy_branch_from_remote_sql(
+        p_branch_name       IN VARCHAR2,
+        p_source_pdb        IN VARCHAR2,
+        p_source_db_link    IN VARCHAR2,
+        p_create_file_dest  IN VARCHAR2
+    ) RETURN VARCHAR2 IS
+    BEGIN
+        RETURN
+            'CREATE PLUGGABLE DATABASE ' || qname(p_branch_name, 'branch name') ||
+            ' FROM ' || qname(p_source_pdb, 'source PDB') ||
+            '@' || db_link_name(p_source_db_link) ||
+            ' CREATE_FILE_DEST = ' ||
+            qliteral(p_create_file_dest);
+    END copy_branch_from_remote_sql;
 
     PROCEDURE log_event(
         p_branch_name IN VARCHAR2,
@@ -340,6 +404,48 @@ CREATE OR REPLACE PACKAGE BODY pdb_branch AS
             open_branch(v_branch_name, p_profile_name);
         END IF;
     END create_branch;
+
+    PROCEDURE copy_branch_from_remote(
+        p_branch_name       IN VARCHAR2,
+        p_source_pdb        IN VARCHAR2,
+        p_source_db_link    IN VARCHAR2,
+        p_open              IN VARCHAR2 DEFAULT 'Y',
+        p_profile_name      IN VARCHAR2 DEFAULT NULL,
+        p_expires_at        IN TIMESTAMP WITH TIME ZONE DEFAULT NULL,
+        p_notes             IN CLOB DEFAULT NULL,
+        p_create_file_dest  IN VARCHAR2 DEFAULT NULL
+    ) IS
+        v_branch_name       VARCHAR2(128) := clean_name(p_branch_name, 'branch name');
+        v_source_pdb        VARCHAR2(128) := clean_name(p_source_pdb, 'source PDB');
+        v_source_db_link    VARCHAR2(128) := db_link_name(p_source_db_link);
+        v_create_file_dest  VARCHAR2(4000);
+        v_sql               VARCHAR2(32767);
+    BEGIN
+        v_create_file_dest := remote_create_file_dest(p_create_file_dest);
+        v_sql := copy_branch_from_remote_sql(
+            v_branch_name,
+            v_source_pdb,
+            v_source_db_link,
+            v_create_file_dest
+        );
+
+        EXECUTE IMMEDIATE v_sql;
+
+        upsert_branch(
+            p_branch_name  => v_branch_name,
+            p_parent_pdb   => v_source_pdb,
+            p_status       => c_status_created,
+            p_profile_name => p_profile_name,
+            p_expires_at   => p_expires_at,
+            p_notes        => p_notes
+        );
+        log_event(v_branch_name, 'COPY_BRANCH_FROM_REMOTE', v_sql);
+        COMMIT;
+
+        IF yes(p_open) THEN
+            open_branch(v_branch_name, p_profile_name);
+        END IF;
+    END copy_branch_from_remote;
 
     PROCEDURE open_branch(
         p_branch_name   IN VARCHAR2,
