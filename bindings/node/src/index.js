@@ -54,6 +54,40 @@ export class BranchClient {
     };
   }
 
+  async cloneBranchFromRemote(branchName, options = {}) {
+    await this.call("pdb_branch.clone_branch_from_remote", [
+      branchName,
+      options.sourcePdb ?? "GOLDEN_MASTER",
+      options.sourceDbLink ?? "PDB_BRANCH_SOURCE",
+      normalizeCloneMode(options.cloneMode ?? "FULL"),
+      yn(options.openBranch ?? true),
+      options.profileName ?? null,
+      options.expiresAt ?? null,
+      options.notes ?? null,
+      options.createFileDest ?? null
+    ]);
+  }
+
+  async cloneBranchFromRemoteWithResult(branchName, options = {}) {
+    const cloneMode = normalizeCloneMode(options.cloneMode ?? "FULL");
+    const tracksFallback = cloneMode === "AUTO";
+    const snapshotCopyRequested = tracksFallback || cloneMode === "SNAPSHOT";
+    const lastEventId = tracksFallback ? await this.maxEventId(branchName) : null;
+
+    await this.cloneBranchFromRemote(branchName, { ...options, cloneMode });
+
+    const fallbackWarning = tracksFallback
+      ? await this.remoteSnapshotFallbackWarning(branchName, lastEventId)
+      : null;
+
+    return {
+      cloneMode,
+      snapshotCopyRequested,
+      snapshotCopyFellBack: fallbackWarning !== null,
+      fallbackWarning
+    };
+  }
+
   async openBranch(branchName, options = {}) {
     await this.call("pdb_branch.open_branch", [branchName, options.profileName ?? null]);
   }
@@ -121,26 +155,30 @@ export class BranchClient {
   }
 
   async snapshotFallbackWarning(branchName, lastEventId) {
-    const binds = [branchName];
-    const eventIdFilter = lastEventId === null ? "" : "AND event_id > :2";
-    if (lastEventId !== null) {
-      binds.push(lastEventId);
-    }
+    return this.eventWarning(branchName, "SNAPSHOT_COPY_FALLBACK", lastEventId);
+  }
+
+  async remoteSnapshotFallbackWarning(branchName, lastEventId) {
+    return this.eventWarning(branchName, "REMOTE_SNAPSHOT_COPY_FALLBACK", lastEventId);
+  }
+
+  async eventWarning(branchName, eventType, lastEventId) {
+    const eventIdFilter = lastEventId === null ? "" : "AND event_id > :3";
 
     const value = await this.queryOptionalValue(
       `
       SELECT warning
         FROM (
-              SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
-                FROM pdb_branch_events
-               WHERE branch_name = UPPER(:1)
-                 AND event_type = 'SNAPSHOT_COPY_FALLBACK'
-                 ${eventIdFilter}
-               ORDER BY event_id DESC
-             )
+                        SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
+                          FROM pdb_branch_events
+                         WHERE branch_name = UPPER(:1)
+                           AND event_type = :2
+                           ${eventIdFilter}
+                         ORDER BY event_id DESC
+                       )
        WHERE ROWNUM = 1
       `,
-      binds
+      [branchName, eventType, ...(lastEventId === null ? [] : [lastEventId])]
     );
 
     return value === null ? null : String(value);
@@ -193,4 +231,12 @@ export function splitSqlPlusScript(script) {
 
 function yn(value) {
   return value ? "Y" : "N";
+}
+
+function normalizeCloneMode(value) {
+  const normalized = String(value).trim().toUpperCase();
+  if (!["FULL", "AUTO", "SNAPSHOT"].includes(normalized)) {
+    throw new Error("cloneMode must be FULL, AUTO, or SNAPSHOT");
+  }
+  return normalized;
 }

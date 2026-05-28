@@ -19,7 +19,16 @@ const root = await oracledb.getConnection({
 const branches = new BranchClient(root);
 await branches.ensureInstalled();
 await branches.createBranch("AGENT_RAG_042", { fromPdb: "GOLDEN_MASTER" });
+await branches.cloneBranchFromRemote("AGENT_RAG_042", {
+  sourcePdb: "AGENT_RAG_042",
+  sourceDbLink: "PDB_BRANCH_ORIGIN",
+  cloneMode: "AUTO" // FULL, AUTO, or SNAPSHOT
+});
 ```
+
+Remote clone calls run in the target CDB. The database link must already exist
+there and point back to the source CDB. Use `cloneBranchFromRemoteWithResult`
+when callers need to inspect whether `AUTO` fell back to a full clone.
 
 Run tests:
 

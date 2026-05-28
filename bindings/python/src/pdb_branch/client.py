@@ -14,6 +14,14 @@ class SnapshotCopyFallbackWarning(RuntimeWarning):
 
 
 @dataclass(frozen=True)
+class RemoteCloneResult:
+    clone_mode: str
+    snapshot_copy_requested: bool
+    snapshot_copy_fell_back: bool
+    fallback_warning: Optional[str]
+
+
+@dataclass(frozen=True)
 class BranchInfo:
     branch_name: str
     parent_pdb: Optional[str]
@@ -115,6 +123,82 @@ class BranchClient:
             )
         if snapshot_copy:
             self._warn_if_snapshot_fell_back(branch_name, last_event_id)
+
+    def clone_branch_from_remote(
+        self,
+        branch_name: str,
+        *,
+        source_pdb: str = "GOLDEN_MASTER",
+        source_db_link: str = "PDB_BRANCH_SOURCE",
+        clone_mode: Optional[str] = "FULL",
+        open_branch: bool = True,
+        profile_name: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
+        notes: Optional[str] = None,
+        create_file_dest: Optional[str] = None,
+    ) -> None:
+        result = self.clone_branch_from_remote_with_result(
+            branch_name,
+            source_pdb=source_pdb,
+            source_db_link=source_db_link,
+            clone_mode=clone_mode,
+            open_branch=open_branch,
+            profile_name=profile_name,
+            expires_at=expires_at,
+            notes=notes,
+            create_file_dest=create_file_dest,
+        )
+        if result.fallback_warning is not None:
+            warnings.warn(
+                result.fallback_warning,
+                SnapshotCopyFallbackWarning,
+                stacklevel=2,
+            )
+
+    def clone_branch_from_remote_with_result(
+        self,
+        branch_name: str,
+        *,
+        source_pdb: str = "GOLDEN_MASTER",
+        source_db_link: str = "PDB_BRANCH_SOURCE",
+        clone_mode: Optional[str] = "FULL",
+        open_branch: bool = True,
+        profile_name: Optional[str] = None,
+        expires_at: Optional[datetime] = None,
+        notes: Optional[str] = None,
+        create_file_dest: Optional[str] = None,
+    ) -> RemoteCloneResult:
+        normalized_clone_mode = _normalize_clone_mode(clone_mode)
+        tracks_fallback = normalized_clone_mode == "AUTO"
+        last_event_id = self._max_event_id(branch_name) if tracks_fallback else None
+
+        with self.cursor() as cur:
+            cur.callproc(
+                "pdb_branch.clone_branch_from_remote",
+                [
+                    branch_name,
+                    source_pdb,
+                    source_db_link,
+                    normalized_clone_mode,
+                    _yn(open_branch),
+                    profile_name,
+                    expires_at,
+                    notes,
+                    create_file_dest,
+                ],
+            )
+
+        fallback_warning = (
+            self._remote_snapshot_fallback_warning(branch_name, last_event_id)
+            if tracks_fallback
+            else None
+        )
+        return RemoteCloneResult(
+            clone_mode=normalized_clone_mode,
+            snapshot_copy_requested=normalized_clone_mode in {"AUTO", "SNAPSHOT"},
+            snapshot_copy_fell_back=fallback_warning is not None,
+            fallback_warning=fallback_warning,
+        )
 
     def open_branch(self, branch_name: str, *, profile_name: Optional[str] = None) -> None:
         with self.cursor() as cur:
@@ -263,6 +347,31 @@ class BranchClient:
                 stacklevel=3,
             )
 
+    def _remote_snapshot_fallback_warning(
+        self,
+        branch_name: str,
+        last_event_id: Optional[int],
+    ) -> Optional[str]:
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT details
+                  FROM (
+                        SELECT details
+                          FROM pdb_branch_events
+                         WHERE branch_name = UPPER(:branch_name)
+                           AND event_type = 'REMOTE_SNAPSHOT_COPY_FALLBACK'
+                           AND (:last_event_id IS NULL OR event_id > :last_event_id)
+                         ORDER BY event_id DESC
+                       )
+                 WHERE ROWNUM = 1
+                """,
+                {"branch_name": branch_name, "last_event_id": last_event_id},
+            )
+            row = cur.fetchone()
+
+        return _read_lob(row[0]) if row else None
+
 
 def connect(*, install: bool = True, **kwargs: Any) -> BranchClient:
     return BranchClient.connect(install=install, **kwargs)
@@ -270,6 +379,13 @@ def connect(*, install: bool = True, **kwargs: Any) -> BranchClient:
 
 def _yn(value: bool) -> str:
     return "Y" if value else "N"
+
+
+def _normalize_clone_mode(value: Optional[str]) -> str:
+    normalized = "FULL" if value is None else value.strip().upper()
+    if normalized not in {"FULL", "AUTO", "SNAPSHOT"}:
+        raise ValueError("clone_mode must be FULL, AUTO, or SNAPSHOT")
+    return normalized
 
 
 def _read_lob(value: Any) -> str:

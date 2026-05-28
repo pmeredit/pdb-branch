@@ -85,8 +85,67 @@ test("createBranchWithResult reports snapshot fallback", async () => {
   });
   assert.equal(connection.queries.length, 2);
   assert.match(connection.queries[0].sql, /MAX\(event_id\)/u);
-  assert.match(connection.queries[1].sql, /SNAPSHOT_COPY_FALLBACK/u);
-  assert.deepEqual(connection.queries[1].binds, ["AGENT_RAG_042", 10]);
+  assert.match(connection.queries[1].sql, /event_type = :2/u);
+  assert.deepEqual(connection.queries[1].binds, ["AGENT_RAG_042", "SNAPSHOT_COPY_FALLBACK", 10]);
+});
+
+test("cloneBranchFromRemote calls PL/SQL package", async () => {
+  const connection = new FakeConnection();
+  const client = new BranchClient(connection);
+
+  await client.cloneBranchFromRemote("AGENT_RAG_042", {
+    sourcePdb: "SOURCE_BRANCH",
+    sourceDbLink: "PDB_BRANCH_ORIGIN",
+    cloneMode: "snapshot",
+    notes: "push to qa",
+    createFileDest: "/opt/oracle/oradata/QA"
+  });
+
+  assert.deepEqual(connection.executions, [
+    {
+      sql: "BEGIN pdb_branch.clone_branch_from_remote(:1, :2, :3, :4, :5, :6, :7, :8, :9); END;",
+      binds: [
+        "AGENT_RAG_042",
+        "SOURCE_BRANCH",
+        "PDB_BRANCH_ORIGIN",
+        "SNAPSHOT",
+        "Y",
+        null,
+        null,
+        "push to qa",
+        "/opt/oracle/oradata/QA"
+      ],
+      options: { autoCommit: false }
+    }
+  ]);
+});
+
+test("cloneBranchFromRemoteWithResult reports auto snapshot fallback", async () => {
+  const warning =
+    "WARNING: remote SNAPSHOT COPY requested with clone mode AUTO; pushed with full clone";
+  const connection = new FakeConnection({ queryResults: ["12", warning] });
+  const client = new BranchClient(connection);
+
+  const result = await client.cloneBranchFromRemoteWithResult("AGENT_RAG_042", {
+    sourcePdb: "SOURCE_BRANCH",
+    sourceDbLink: "PDB_BRANCH_ORIGIN",
+    cloneMode: "auto"
+  });
+
+  assert.deepEqual(result, {
+    cloneMode: "AUTO",
+    snapshotCopyRequested: true,
+    snapshotCopyFellBack: true,
+    fallbackWarning: warning
+  });
+  assert.equal(connection.queries.length, 2);
+  assert.match(connection.queries[0].sql, /MAX\(event_id\)/u);
+  assert.match(connection.queries[1].sql, /event_type = :2/u);
+  assert.deepEqual(connection.queries[1].binds, [
+    "AGENT_RAG_042",
+    "REMOTE_SNAPSHOT_COPY_FALLBACK",
+    12
+  ]);
 });
 
 test("ensureInstalled executes shared SQL statements and commits", async () => {

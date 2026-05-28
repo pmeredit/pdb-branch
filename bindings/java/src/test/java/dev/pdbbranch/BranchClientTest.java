@@ -73,8 +73,71 @@ final class BranchClientTest {
         assertEquals(new BranchCreateResult(true, true, warning), result);
         assertEquals(2, executor.queries.size());
         assertTrue(executor.queries.get(0).sql.contains("MAX(event_id)"));
-        assertTrue(executor.queries.get(1).sql.contains("SNAPSHOT_COPY_FALLBACK"));
-        assertEquals(Arrays.asList("AGENT_RAG_042", 10L), executor.queries.get(1).binds);
+        assertTrue(executor.queries.get(1).sql.contains("event_type = ?"));
+        assertEquals(
+                Arrays.asList("AGENT_RAG_042", "SNAPSHOT_COPY_FALLBACK", 10L),
+                executor.queries.get(1).binds
+        );
+    }
+
+    @Test
+    void cloneBranchFromRemoteCallsPlsqlPackage() throws Exception {
+        FakeExecutor executor = new FakeExecutor();
+        BranchClient client = new BranchClient(executor);
+
+        client.cloneBranchFromRemote(
+                "AGENT_RAG_042",
+                RemoteCloneOptions.defaults()
+                        .withSourcePdb("SOURCE_BRANCH")
+                        .withSourceDbLink("PDB_BRANCH_ORIGIN")
+                        .withCloneMode("snapshot")
+                        .withNotes("push to qa")
+                        .withCreateFileDest("/opt/oracle/oradata/QA")
+        );
+
+        assertEquals(1, executor.executions.size());
+        assertEquals(
+                "BEGIN pdb_branch.clone_branch_from_remote(?, ?, ?, ?, ?, ?, ?, ?, ?); END;",
+                executor.executions.get(0).sql
+        );
+        assertEquals(
+                Arrays.asList(
+                        "AGENT_RAG_042",
+                        "SOURCE_BRANCH",
+                        "PDB_BRANCH_ORIGIN",
+                        "SNAPSHOT",
+                        "Y",
+                        null,
+                        null,
+                        "push to qa",
+                        "/opt/oracle/oradata/QA"
+                ),
+                executor.executions.get(0).binds
+        );
+    }
+
+    @Test
+    void cloneBranchFromRemoteWithResultReportsAutoSnapshotFallback() throws Exception {
+        String warning = "WARNING: remote SNAPSHOT COPY requested with clone mode AUTO; pushed with full clone";
+        FakeExecutor executor = new FakeExecutor(List.of(Optional.of("12"), Optional.of(warning)));
+        BranchClient client = new BranchClient(executor);
+
+        RemoteCloneResult result = client.cloneBranchFromRemoteWithResult(
+                "AGENT_RAG_042",
+                RemoteCloneOptions.defaults()
+                        .withSourcePdb("SOURCE_BRANCH")
+                        .withSourceDbLink("PDB_BRANCH_ORIGIN")
+                        .withCloneMode("auto")
+        );
+
+        assertEquals(new RemoteCloneResult("AUTO", true, true, warning), result);
+        assertEquals(2, executor.queries.size());
+        assertTrue(executor.queries.get(0).sql.contains("MAX(event_id)"));
+        assertTrue(executor.queries.get(1).sql.contains("event_type = ?"));
+        assertEquals(
+                Arrays.asList("AGENT_RAG_042", "REMOTE_SNAPSHOT_COPY_FALLBACK", 12L),
+                executor.queries.get(1).binds
+        );
     }
 
     @Test

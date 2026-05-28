@@ -183,6 +183,14 @@ keep lifecycle coupling between the source PDB and snapshot-copy clones. Use
 `snapshot` for environments where failure is preferable to a full copy, and use
 `auto` when cheap copy-on-write is preferred but a full copy is acceptable.
 
+The same target-side remote clone primitive is exposed by the bindings:
+Rust `clone_branch_from_remote`, Python `clone_branch_from_remote`, Node.js
+`cloneBranchFromRemote`, and Java `cloneBranchFromRemote`. Use the
+`*_with_result` / `*WithResult` variants when callers need to detect whether
+`AUTO` fell back to a full clone. These APIs do not create database links,
+unplug PDBs, or transfer bytes client-side; they connect to the target CDB and
+ask Oracle to clone `SOURCE_PDB@DB_LINK`.
+
 Other lifecycle operations are explicit commands:
 
 ```bash
@@ -262,6 +270,13 @@ client.create_branch(
     "AGENT_RAG_042",
     from_pdb="GOLDEN_MASTER",
     notes="try smaller chunk size and rerank before answer synthesis",
+)
+
+client.clone_branch_from_remote(
+    "AGENT_RAG_042",
+    source_pdb="AGENT_RAG_042",
+    source_db_link="PDB_BRANCH_ORIGIN",
+    clone_mode="AUTO",
 )
 
 client.record_score("AGENT_RAG_042", 0.91, notes="eval: qa_regression_v3")

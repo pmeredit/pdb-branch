@@ -52,6 +52,42 @@ public final class BranchClient {
         );
     }
 
+    public void cloneBranchFromRemote(String branchName, RemoteCloneOptions options) throws SQLException {
+        call("pdb_branch.clone_branch_from_remote", Arrays.asList(
+                branchName,
+                options.sourcePdb(),
+                options.sourceDbLink(),
+                normalizeCloneMode(options.cloneMode()),
+                yn(options.openBranch()),
+                nullable(options.profileName()),
+                nullable(options.expiresAt()),
+                nullable(options.notes()),
+                nullable(options.createFileDest())
+        ));
+    }
+
+    public RemoteCloneResult cloneBranchFromRemoteWithResult(
+            String branchName,
+            RemoteCloneOptions options
+    ) throws SQLException {
+        String cloneMode = normalizeCloneMode(options.cloneMode());
+        boolean tracksFallback = "AUTO".equals(cloneMode);
+        boolean snapshotCopyRequested = tracksFallback || "SNAPSHOT".equals(cloneMode);
+        Optional<Long> lastEventId = tracksFallback ? maxEventId(branchName) : Optional.empty();
+
+        cloneBranchFromRemote(branchName, options);
+
+        Optional<String> fallbackWarning = tracksFallback
+                ? remoteSnapshotFallbackWarning(branchName, lastEventId)
+                : Optional.empty();
+        return new RemoteCloneResult(
+                cloneMode,
+                snapshotCopyRequested,
+                fallbackWarning.isPresent(),
+                fallbackWarning.orElse(null)
+        );
+    }
+
     public void openBranch(String branchName, String profileName) throws SQLException {
         call("pdb_branch.open_branch", Arrays.asList(branchName, nullable(profileName)));
     }
@@ -113,8 +149,24 @@ public final class BranchClient {
             String branchName,
             Optional<Long> lastEventId
     ) throws SQLException {
+        return eventWarning(branchName, "SNAPSHOT_COPY_FALLBACK", lastEventId);
+    }
+
+    private Optional<String> remoteSnapshotFallbackWarning(
+            String branchName,
+            Optional<Long> lastEventId
+    ) throws SQLException {
+        return eventWarning(branchName, "REMOTE_SNAPSHOT_COPY_FALLBACK", lastEventId);
+    }
+
+    private Optional<String> eventWarning(
+            String branchName,
+            String eventType,
+            Optional<Long> lastEventId
+    ) throws SQLException {
         List<Object> binds = new ArrayList<>();
         binds.add(branchName);
+        binds.add(eventType);
         String eventIdFilter = "";
         if (lastEventId.isPresent()) {
             eventIdFilter = "AND event_id > ?";
@@ -128,7 +180,7 @@ public final class BranchClient {
                         SELECT DBMS_LOB.SUBSTR(details, 4000, 1) warning
                           FROM pdb_branch_events
                          WHERE branch_name = UPPER(?)
-                           AND event_type = 'SNAPSHOT_COPY_FALLBACK'
+                           AND event_type = ?
                            %s
                          ORDER BY event_id DESC
                        )
@@ -136,6 +188,14 @@ public final class BranchClient {
                 """.formatted(eventIdFilter),
                 binds
         );
+    }
+
+    private static String normalizeCloneMode(String value) {
+        String cloneMode = value == null ? "FULL" : value.trim().toUpperCase();
+        if (!List.of("FULL", "AUTO", "SNAPSHOT").contains(cloneMode)) {
+            throw new IllegalArgumentException("clone mode must be FULL, AUTO, or SNAPSHOT");
+        }
+        return cloneMode;
     }
 
     private static String yn(boolean value) {

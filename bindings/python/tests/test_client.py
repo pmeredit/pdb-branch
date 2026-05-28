@@ -2,7 +2,7 @@ from typing import Optional
 
 import pytest
 
-from pdb_branch import BranchClient, SnapshotCopyFallbackWarning
+from pdb_branch import BranchClient, RemoteCloneResult, SnapshotCopyFallbackWarning
 
 
 class FakeCursor:
@@ -105,6 +105,58 @@ def test_create_branch_warns_when_snapshot_falls_back() -> None:
 
     with pytest.warns(SnapshotCopyFallbackWarning, match="created with full clone"):
         client.create_branch("agent_rag_042")
+
+
+def test_clone_branch_from_remote_calls_plsql_api() -> None:
+    connection = FakeConnection()
+    client = BranchClient(connection, install=False)
+
+    result = client.clone_branch_from_remote_with_result(
+        "agent_rag_042",
+        source_pdb="source_branch",
+        source_db_link="pdb_branch_origin",
+        clone_mode="snapshot",
+        notes="push to qa",
+        create_file_dest="/opt/oracle/oradata/QA",
+    )
+
+    assert connection.cursor_obj.calls == [
+        (
+            "pdb_branch.clone_branch_from_remote",
+            [
+                "agent_rag_042",
+                "source_branch",
+                "pdb_branch_origin",
+                "SNAPSHOT",
+                "Y",
+                None,
+                None,
+                "push to qa",
+                "/opt/oracle/oradata/QA",
+            ],
+        )
+    ]
+    assert result == RemoteCloneResult(
+        clone_mode="SNAPSHOT",
+        snapshot_copy_requested=True,
+        snapshot_copy_fell_back=False,
+        fallback_warning=None,
+    )
+
+
+def test_clone_branch_from_remote_warns_when_auto_falls_back() -> None:
+    connection = FakeConnection(
+        "WARNING: remote SNAPSHOT COPY requested with clone mode AUTO; pushed with full clone"
+    )
+    client = BranchClient(connection, install=False)
+
+    with pytest.warns(SnapshotCopyFallbackWarning, match="pushed with full clone"):
+        client.clone_branch_from_remote(
+            "agent_rag_042",
+            source_pdb="source_branch",
+            source_db_link="pdb_branch_origin",
+            clone_mode="auto",
+        )
 
 
 def test_get_branch_maps_row_to_dataclass() -> None:
